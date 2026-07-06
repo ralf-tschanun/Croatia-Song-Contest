@@ -24,8 +24,7 @@ function renderResults(data) {
     points: pointsBySong[song] || 0,
     originalIndex: idx
   }))
-  .sort((a,b) => b.points - a.points || a.originalIndex - b.originalIndex)
-  .slice(0, 20);
+  .sort((a,b) => b.points - a.points || a.originalIndex - b.originalIndex);
 
   const totalPoints = ordered.reduce((sum, r) => sum + (Number(r.points) || 0), 0);
   const calculatedVotingCount = totalPoints > 0 ? Math.round(totalPoints / 15) : 0;
