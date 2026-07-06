@@ -29,6 +29,7 @@
     button{cursor:pointer;background:linear-gradient(135deg,var(--accent),#ff9d5a);color:#1b1200;font-weight:900;border:0;margin-top:16px}
     button.secondary{background:#0f1530;color:var(--text);border:1px solid var(--border)}
     button:disabled{opacity:.55;cursor:not-allowed}
+    button.completed, button.completed:disabled{background:#28a745 !important;color:white !important;opacity:1;cursor:default}
     .msg{padding:12px 14px;border-radius:14px;margin-top:12px;display:none}
     .msg.ok{display:block;background:rgba(124,255,178,.12);border:1px solid rgba(124,255,178,.35);color:var(--ok)}
     .msg.err{display:block;background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.35);color:var(--danger)}
@@ -36,6 +37,10 @@
     @media(max-width:760px){.songlist{grid-template-columns:1fr}}
     .song{padding:10px 12px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:12px}
     .small{color:var(--muted);font-size:13px;line-height:1.45}
+    .result-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
+    .stat{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:16px;padding:12px}
+    .stat b{display:block;font-size:24px;color:var(--accent)}
+    @media(max-width:560px){.result-stats{grid-template-columns:1fr}}
     table{width:100%;border-collapse:collapse;margin-top:10px}
     th,td{padding:10px;border-bottom:1px solid var(--border);text-align:left}
     th{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.04em}
@@ -45,6 +50,17 @@
     footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
     .tabs{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px}
     .tabs button{width:auto;margin:0;padding:10px 14px;background:#0f1530;color:var(--text);border:1px solid var(--border)}
+
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.66);display:none;align-items:center;justify-content:center;padding:18px;z-index:9999}
+    .modal-backdrop.show{display:flex}
+    .modal{width:min(440px,100%);background:linear-gradient(180deg,rgba(21,27,51,.98),rgba(12,17,38,.98));border:1px solid var(--border);border-radius:24px;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center}
+    .modal h2{margin:0 0 10px;font-size:26px}
+    .modal p{margin:0;color:var(--muted);line-height:1.45}
+    .modal-actions{display:grid;grid-template-columns:1fr 1.2fr;gap:10px;margin-top:18px}
+    .modal-actions button{margin-top:0}
+    .modal-actions .cancel{background:#0f1530;color:var(--text);border:1px solid var(--border)}
+    .modal-actions .confirm{background:linear-gradient(135deg,var(--accent),#ff9d5a);color:#1b1200}
+    @media(max-width:420px){.modal-actions{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -60,10 +76,10 @@
 
     <section id="voteView" class="card">
       <h2>Dein Voting</h2>
-      <p class="small">Vergib deine Punkte an fünf verschiedene Songs. Jeder Song darf nur einmal gewählt werden.</p>
+      <p class="small">Vergib deine Punkte an fünf verschiedene Songs. Jeder Song darf nur einmal gewählt werden. Nach dem finalen Absenden kann das Voting nicht mehr geändert werden.</p>
 
       <label for="voterName">Dein Name</label>
-      <input id="voterName" placeholder="z. B. Ralf" autocomplete="name" />
+      <select id="voterName"></select>
 
       <div class="grid">
         <div><label><span class="points">5</span> Punkte</label><select id="p5"></select></div>
@@ -73,14 +89,13 @@
         <div><label><span class="points">1</span> Punkt</label><select id="p1"></select></div>
       </div>
 
-      <button class="secondary" onclick="saveDraft()">Zwischenspeichern</button>
       <button id="submitBtn" onclick="submitVote()">Final absenden</button>
       <div id="message" class="msg"></div>
     </section>
 
     <section id="resultsView" class="card" style="display:none">
       <h2>Live-Ergebnis</h2>
-      <p class="small">Die Rangliste wird aus den abgegebenen Stimmen berechnet. Der Abruf funktioniert, sobald du die Google-Apps-Script-URL eingetragen hast.</p>
+      <p class="small">Die Rangliste wird aus den final abgegebenen Stimmen berechnet.</p>
       <button onclick="loadResults()">Ergebnisse aktualisieren</button>
       <div id="results"></div>
     </section>
@@ -95,13 +110,25 @@
     </footer>
   </div>
 
+  <div id="confirmModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="modal">
+      <h2 id="confirmTitle">🎤 Voting endgültig abschicken?</h2>
+      <p>Nach dem Absenden kann Dein Voting nicht mehr geändert werden.</p>
+      <div class="modal-actions">
+        <button class="cancel" onclick="resolveFinalConfirm(false)">Cancel</button>
+        <button class="confirm" onclick="resolveFinalConfirm(true)">Yes, final absenden</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 /**
  * 1) Trage hier deine Google Apps Script Web-App URL ein.
  *    Beispiel: const API_URL = "https://script.google.com/macros/s/AKfycb.../exec";
  * 2) Trage unten deine 20 echten Songs ein.
+ * 3) Trage unten deine 25 echten Teilnehmernamen ein.
  */
-const API_URL = "https://script.google.com/macros/s/AKfycby0HFb7D7Z2q1jOAR1KWrf-mW21bIHbQ9qkpw001ipxrpeHxSyAWcq_gwGvxiaxctjR/exec"; // TODO: Google Apps Script Web-App URL einfügen
+const API_URL = "https://script.google.com/macros/s/AKfycby0HFb7D7Z2q1jOAR1KWrf-mW21bIHbQ9qkpw001ipxrpeHxSyAWcq_gwGvxiaxctjR/exec";
 const EVENT_ID = "acroatia-2026";
 
 // Ersetze diese Platzhalter durch Künstler + Titel.
@@ -129,18 +156,28 @@ const SONGS = [
 ];
 
 const pointMap = { p5: 5, p4: 4, p3: 3, p2: 2, p1: 1 };
+let finalConfirmResolver = null;
 
 function init() {
+  fillVoterSelect();
   ["p5","p4","p3","p2","p1"].forEach(id => fillSelect(document.getElementById(id)));
   document.querySelectorAll("select").forEach(s => s.addEventListener("change", validateChoices));
   renderSongList();
-  loadDraft();
+  loadStoredFinalVote();
   validateChoices();
 
-  if (localStorage.getItem("acroatiaFinalSubmitted") === "true") {
-    lockVoting();
+  if (localStorage.getItem(storageKeyFinal) === "true") {
+    loadStoredFinalVote();
+    setVotingCompletedUI();
     showMsg("ok", "Du hast dein Voting bereits final abgeschickt.");
   }
+}
+
+function fillVoterSelect() {
+  const sel = document.getElementById("voterName");
+  sel.innerHTML = '<option value="">Bitte Namen auswählen</option>' + VOTERS.map(name =>
+    `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
+  ).join("");
 }
 
 function fillSelect(sel) {
@@ -153,35 +190,41 @@ function renderSongList() {
   document.getElementById("songList").innerHTML = SONGS.map((s,i)=>`<div class="song"><b>${i+1}.</b> ${escapeHtml(s)}</div>`).join("");
 }
 
-function saveDraft() {
-  const draft = {
-    voter: document.getElementById("voterName").value.trim(),
-    choices: getChoices()
-  };
-  localStorage.setItem("acroatiaDraft", JSON.stringify(draft));
-  showMsg("ok", "Zwischengespeichert. Du kannst dein Voting noch ändern.");
-}
-
-function loadDraft() {
-  const raw = localStorage.getItem("acroatiaDraft");
-  if (!raw) return;
-
-  const draft = JSON.parse(raw);
-  document.getElementById("voterName").value = draft.voter || "";
-
-  (draft.choices || []).forEach(c => {
-    if (document.getElementById(c.id)) {
-      document.getElementById(c.id).value = c.song || "";
-    }
-  });
-}
-
 function lockVoting() {
   document.getElementById("voterName").disabled = true;
   ["p5","p4","p3","p2","p1"].forEach(id => {
     document.getElementById(id).disabled = true;
   });
-  document.getElementById("submitBtn").disabled = true;
+}
+
+function setVotingCompletedUI() {
+  lockVoting();
+  const btn = document.getElementById("submitBtn");
+  btn.textContent = "✅ Voting abgeschlossen";
+  btn.classList.add("completed");
+  btn.disabled = true;
+}
+
+function storeFinalVote(voter, choices) {
+  localStorage.setItem(storageKeyVote, JSON.stringify({ voter, choices }));
+  localStorage.setItem(storageKeyFinal, "true");
+}
+
+function loadStoredFinalVote() {
+  const raw = localStorage.getItem(storageKeyVote);
+  if (!raw) return;
+
+  try {
+    const stored = JSON.parse(raw);
+    if (stored.voter) document.getElementById("voterName").value = stored.voter;
+
+    (stored.choices || []).forEach(c => {
+      const el = document.getElementById(c.id);
+      if (el) el.value = c.song || "";
+    });
+  } catch (e) {
+    console.warn("Stored vote could not be loaded", e);
+  }
 }
 
 function getChoices() {
@@ -189,6 +232,11 @@ function getChoices() {
 }
 
 function validateChoices() {
+  if (localStorage.getItem(storageKeyFinal) === "true") {
+    setVotingCompletedUI();
+    return;
+  }
+
   const choices = getChoices();
   const selected = choices.map(c => c.song).filter(Boolean);
   const dup = selected.find((s, i) => selected.indexOf(s) !== i);
@@ -197,6 +245,21 @@ function validateChoices() {
   document.getElementById("submitBtn").disabled = !!dup || !allChosen || !nameOk;
   if (dup) showMsg("err", "Bitte jeden Song nur einmal auswählen.");
   else hideMsg();
+}
+
+function confirmFinalSubmit() {
+  return new Promise(resolve => {
+    finalConfirmResolver = resolve;
+    document.getElementById("confirmModal").classList.add("show");
+  });
+}
+
+function resolveFinalConfirm(value) {
+  document.getElementById("confirmModal").classList.remove("show");
+  if (finalConfirmResolver) {
+    finalConfirmResolver(value);
+    finalConfirmResolver = null;
+  }
 }
 
 async function submitVote() {
@@ -208,6 +271,9 @@ async function submitVote() {
   if (new Set(selected).size !== 5) return showMsg("err", "Bitte jeden Song nur einmal wählen.");
   if (!API_URL) return showMsg("err", "API_URL ist noch leer. Trage zuerst die Google-Apps-Script-URL im Code ein.");
 
+  const confirmed = await confirmFinalSubmit();
+  if (!confirmed) return;
+
   const payload = {
     eventId: EVENT_ID,
     voter,
@@ -217,52 +283,76 @@ async function submitVote() {
 
   try {
     document.getElementById("submitBtn").disabled = true;
-    const res = await fetch(API_URL, {
+    await fetch(API_URL, {
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload)
     });
-    localStorage.setItem("acroatiaVoteSubmitted", "true");
-   localStorage.setItem("acroatiaFinalSubmitted", "true");
 
-// Button ändern
-const btn = document.getElementById("submitBtn");
-btn.textContent = "✅ Danke für Dein Voting!";
-btn.style.background = "#28a745";
-btn.style.color = "white";
-
-lockVoting();
-
-showMsg("ok", "Danke! Dein Voting wurde erfolgreich gespeichert.");
+    storeFinalVote(voter, choices);
+    setVotingCompletedUI();
+    showMsg("ok", "Vielen Dank! Dein Voting wurde erfolgreich gespeichert.");
   } catch (e) {
     showMsg("err", "Senden fehlgeschlagen. Bitte Verbindung prüfen.");
-  } finally {
     validateChoices();
   }
 }
 
-async function loadResults() {
+function loadResults() {
   if (!API_URL) {
     document.getElementById("results").innerHTML = `<p class="msg err" style="display:block">API_URL ist noch leer.</p>`;
     return;
   }
-  try {
-    const res = await fetch(`${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}`);
-    const data = await res.json();
-    renderResults(data.results || []);
-  } catch(e) {
+
+  const callbackName = "acroatiaResults_" + Date.now();
+  const script = document.createElement("script");
+
+  window[callbackName] = function(data) {
+    renderResults(data || {});
+    delete window[callbackName];
+    script.remove();
+  };
+
+  script.src = `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&callback=${callbackName}`;
+  script.onerror = function() {
     document.getElementById("results").innerHTML = `<p class="msg err" style="display:block">Ergebnisse konnten nicht geladen werden.</p>`;
-  }
+    delete window[callbackName];
+    script.remove();
+  };
+
+  document.body.appendChild(script);
 }
 
-function renderResults(rows) {
-  const max = Math.max(1, ...rows.map(r => r.points || 0));
+function renderResults(data) {
+  const rows = Array.isArray(data) ? data : (data.results || []);
+  const pointsBySong = {};
+  rows.forEach(r => {
+    if (r.song) pointsBySong[r.song] = Number(r.points) || 0;
+  });
+
+  const ordered = SONGS.map((song, idx) => ({
+    song,
+    points: pointsBySong[song] || 0,
+    originalIndex: idx
+  }))
+  .sort((a,b) => b.points - a.points || a.originalIndex - b.originalIndex)
+  .slice(0, 20);
+
+  const totalPoints = ordered.reduce((sum, r) => sum + (Number(r.points) || 0), 0);
+  const calculatedVotingCount = totalPoints > 0 ? Math.round(totalPoints / 15) : 0;
+  const votingCount = Number(data.votingCount ?? data.voterCount ?? calculatedVotingCount) || 0;
+  const max = Math.max(1, ...ordered.map(r => r.points || 0));
+
   document.getElementById("results").innerHTML = `
+    <div class="result-stats">
+      <div class="stat"><b>${votingCount}</b><span>Votings eingegangen</span></div>
+      <div class="stat"><b>${ordered[0]?.points || 0}</b><span>Punkte für Platz 1</span></div>
+    </div>
     <table>
       <thead><tr><th>Rang</th><th>Song</th><th>Punkte</th><th></th></tr></thead>
       <tbody>
-        ${rows.map((r,i)=>`
+        ${ordered.map((r,i)=>`
           <tr>
             <td class="rank">${i+1}</td>
             <td>${escapeHtml(r.song)}</td>
