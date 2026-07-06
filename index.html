@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>A'Croatia 2026 – Song Contest</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>A'Croatia <span>2026</span></h1>
+      <div class="sub">Private Song Contest Voting · 5–4–3–2–1 Punkte</div>
+      <div class="tabs">
+        <button class="secondary" onclick="showVote()">Voting</button>
+        <button class="secondary" onclick="showResults()">Ergebnisse</button>
+      </div>
+    </header>
+
+    <section id="voteView" class="card">
+      <h2>Dein Voting</h2>
+      <p class="small">Vergib deine Punkte an fünf verschiedene Songs. Jeder Song darf nur einmal gewählt werden.</p>
+
+      <label for="voterName">Dein Name</label>
+      <select id="voterName"></select>
+
+      <div class="grid">
+        <div><label><span class="points">5</span> Punkte</label><select id="p5"></select></div>
+        <div><label><span class="points">4</span> Punkte</label><select id="p4"></select></div>
+        <div><label><span class="points">3</span> Punkte</label><select id="p3"></select></div>
+        <div><label><span class="points">2</span> Punkte</label><select id="p2"></select></div>
+        <div><label><span class="points">1</span> Punkt</label><select id="p1"></select></div>
+      </div>
+
+      <button id="submitBtn" onclick="submitVote()">Final absenden</button>
+      <div id="message" class="msg"></div>
+    </section>
+
+    <section id="resultsView" class="card" style="display:none">
+      <h2>Live-Ergebnis</h2>
+      <p class="small">Die Rangliste wird aus den abgegebenen Stimmen berechnet.</p>
+      <button onclick="loadResults()">Ergebnisse aktualisieren</button>
+      <div id="results"></div>
+    </section>
+
+    <section class="card">
+      <h2>Songs</h2>
+      <div id="songList" class="songlist"></div>
+    </section>
+
+    <footer>Built for A'Croatia 2026 · Hosted on GitHub Pages</footer>
+  </div>
+
+  <div id="confirmOverlay" class="modal-overlay" style="display:none">
+    <div class="modal">
+      <h2>🎤 Voting endgültig abschicken?</h2>
+      <p>Nach dem Absenden kann Dein Voting nicht mehr geändert werden.</p>
+      <div class="modal-actions">
+        <button class="secondary" onclick="closeConfirmModal()">Cancel</button>
+        <button onclick="confirmFinalSubmit()">Yes, final absenden</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/voting.js"></script>
+  <script src="js/results.js"></script>
+</body>
+</html>
