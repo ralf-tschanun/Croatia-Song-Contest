@@ -20,9 +20,9 @@ function renderResults(data) {
   });
 
   const ordered = SONGS.map((song, idx) => ({
-    song,
-    points: pointsBySong[song] || 0,
-    originalIndex: idx
+  song: song.title,
+  points: pointsBySong[song.title] || 0,
+  originalIndex: idx
   }))
   .sort((a,b) => b.points - a.points || a.originalIndex - b.originalIndex);
 
