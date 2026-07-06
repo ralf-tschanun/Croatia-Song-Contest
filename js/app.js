@@ -64,15 +64,34 @@ function fillVoterSelect() {
 }
 
 function fillSelect(sel) {
-  sel.innerHTML = '<option value="">Bitte wählen</option>' + SONGS.map((s, i) =>
-    `<option value="${escapeHtml(s)}">${i+1}. ${escapeHtml(s)}</option>`
-  ).join("");
+  sel.innerHTML =
+    '<option value="">Bitte wählen</option>' +
+    SONGS.map((song,i)=>
+      `<option value="${escapeHtml(song.title)}">${i+1}. ${escapeHtml(song.title)}</option>`
+    ).join("");
 }
 
 function renderSongList() {
-  document.getElementById("songList").innerHTML = SONGS.map((s,i)=>
-    `<div class="song"><b>${i+1}.</b> ${escapeHtml(s)}</div>`
-  ).join("");
+  document.getElementById("songList").innerHTML =
+  SONGS.map((song,i)=>`
+
+  <div class="song">
+    <b>${i+1}.</b>
+
+    ${escapeHtml(song.title)}
+
+    ${
+        song.spotify
+        ? `<a class="spotifyLink"
+             href="${song.spotify}"
+             target="_blank"
+             title="Auf Spotify öffnen">🎧</a>`
+        : ""
+    }
+
+  </div>
+
+  `).join("");
 }
 
 function showVote(){
