@@ -132,3 +132,19 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
     width:44px;
   }
 }
+
+.song{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+
+.spotifyLink{
+    text-decoration:none;
+    font-size:22px;
+    margin-left:10px;
+}
+
+.spotifyLink:hover{
+    transform:scale(1.2);
+}
