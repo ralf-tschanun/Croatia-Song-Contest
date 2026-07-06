@@ -44,3 +44,80 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
 .modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:760px){.grid{grid-template-columns:1fr}.wrap{padding:14px}.card{padding:15px}.songlist{grid-template-columns:1fr}}
 @media(max-width:560px){.result-stats{grid-template-columns:1fr}.modal-actions{grid-template-columns:1fr}}
+
+
+/* Results table: compact columns for rank, points and bar; song gets remaining width */
+#results table{
+  width:100%;
+  table-layout:auto;
+}
+
+#results th:nth-child(1),
+#results td:nth-child(1){
+  width:1%;
+  white-space:nowrap;
+  text-align:center;
+  padding-left:6px;
+  padding-right:8px;
+}
+
+#results th:nth-child(2),
+#results td:nth-child(2){
+  width:auto;
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+#results th:nth-child(3),
+#results td:nth-child(3){
+  width:1%;
+  white-space:nowrap;
+  text-align:right;
+  padding-left:8px;
+  padding-right:8px;
+}
+
+#results th:nth-child(4),
+#results td:nth-child(4){
+  width:70px;
+  min-width:70px;
+  max-width:70px;
+  padding-left:6px;
+  padding-right:0;
+}
+
+#results .bar{
+  width:64px;
+}
+
+@media(max-width:560px){
+  #results th,
+  #results td{
+    padding-top:8px;
+    padding-bottom:8px;
+  }
+
+  #results th:nth-child(1),
+  #results td:nth-child(1){
+    padding-left:2px;
+    padding-right:5px;
+  }
+
+  #results th:nth-child(3),
+  #results td:nth-child(3){
+    padding-left:5px;
+    padding-right:5px;
+  }
+
+  #results th:nth-child(4),
+  #results td:nth-child(4){
+    width:48px;
+    min-width:48px;
+    max-width:48px;
+    padding-left:4px;
+  }
+
+  #results .bar{
+    width:44px;
+  }
+}
