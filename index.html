@@ -73,7 +73,8 @@
         <div><label><span class="points">1</span> Punkt</label><select id="p1"></select></div>
       </div>
 
-      <button id="submitBtn" onclick="submitVote()">Voting absenden</button>
+      <button class="secondary" onclick="saveDraft()">Zwischenspeichern</button>
+      <button id="submitBtn" onclick="submitVote()">Final absenden</button>
       <div id="message" class="msg"></div>
     </section>
 
@@ -133,7 +134,13 @@ function init() {
   ["p5","p4","p3","p2","p1"].forEach(id => fillSelect(document.getElementById(id)));
   document.querySelectorAll("select").forEach(s => s.addEventListener("change", validateChoices));
   renderSongList();
+  loadDraft();
   validateChoices();
+
+  if (localStorage.getItem("acroatiaFinalSubmitted") === "true") {
+    lockVoting();
+    showMsg("ok", "Du hast dein Voting bereits final abgeschickt.");
+  }
 }
 
 function fillSelect(sel) {
@@ -144,6 +151,37 @@ function fillSelect(sel) {
 
 function renderSongList() {
   document.getElementById("songList").innerHTML = SONGS.map((s,i)=>`<div class="song"><b>${i+1}.</b> ${escapeHtml(s)}</div>`).join("");
+}
+
+function saveDraft() {
+  const draft = {
+    voter: document.getElementById("voterName").value.trim(),
+    choices: getChoices()
+  };
+  localStorage.setItem("acroatiaDraft", JSON.stringify(draft));
+  showMsg("ok", "Zwischengespeichert. Du kannst dein Voting noch ändern.");
+}
+
+function loadDraft() {
+  const raw = localStorage.getItem("acroatiaDraft");
+  if (!raw) return;
+
+  const draft = JSON.parse(raw);
+  document.getElementById("voterName").value = draft.voter || "";
+
+  (draft.choices || []).forEach(c => {
+    if (document.getElementById(c.id)) {
+      document.getElementById(c.id).value = c.song || "";
+    }
+  });
+}
+
+function lockVoting() {
+  document.getElementById("voterName").disabled = true;
+  ["p5","p4","p3","p2","p1"].forEach(id => {
+    document.getElementById(id).disabled = true;
+  });
+  document.getElementById("submitBtn").disabled = true;
 }
 
 function getChoices() {
@@ -186,7 +224,9 @@ async function submitVote() {
       body: JSON.stringify(payload)
     });
     localStorage.setItem("acroatiaVoteSubmitted", "true");
-    showMsg("ok", "Danke! Dein Voting wurde abgeschickt.");
+    localStorage.setItem("acroatiaFinalSubmitted", "true");
+    lockVoting();
+    showMsg("ok", "Danke! Dein Voting wurde final abgeschickt und kann nicht mehr geändert werden.");
   } catch (e) {
     showMsg("err", "Senden fehlgeschlagen. Bitte Verbindung prüfen.");
   } finally {
