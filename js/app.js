@@ -76,20 +76,14 @@ function renderSongList() {
   SONGS.map((song,i)=>`
 
   <div class="song">
-    <b>${i+1}.</b>
-
-    ${escapeHtml(song.title)}
-
-    ${
-        song.spotify
-        ? `<a class="spotifyLink"
-             href="${song.spotify}"
-             target="_blank"
-             title="Auf Spotify öffnen">🎧</a>`
-        : ""
-    }
-
-  </div>
+  <b>${i+1}.</b>
+  <span class="songTitle">${escapeHtml(song.title)}</span>
+  ${
+    song.spotify
+    ? `<a class="spotifyLink" href="${song.spotify}" target="_blank" title="Auf Spotify öffnen">🎧</a>`
+    : ""
+  }
+</div>
 
   `).join("");
 }
