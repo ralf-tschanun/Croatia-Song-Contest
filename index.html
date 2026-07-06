@@ -224,9 +224,17 @@ async function submitVote() {
       body: JSON.stringify(payload)
     });
     localStorage.setItem("acroatiaVoteSubmitted", "true");
-    localStorage.setItem("acroatiaFinalSubmitted", "true");
-    lockVoting();
-    showMsg("ok", "Danke! Dein Voting wurde final abgeschickt und kann nicht mehr geändert werden.");
+   localStorage.setItem("acroatiaFinalSubmitted", "true");
+
+// Button ändern
+const btn = document.getElementById("submitBtn");
+btn.textContent = "✅ Danke für Dein Voting!";
+btn.style.background = "#28a745";
+btn.style.color = "white";
+
+lockVoting();
+
+showMsg("ok", "Danke! Dein Voting wurde erfolgreich gespeichert.");
   } catch (e) {
     showMsg("err", "Senden fehlgeschlagen. Bitte Verbindung prüfen.");
   } finally {
