@@ -134,17 +134,31 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
 }
 
 .song{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+  text-align:left;
+}
+
+.song b{
+  flex:0 0 auto;
+}
+
+.song .songTitle{
+  flex:1 1 auto;
+  min-width:0;
+  text-align:left;
+  overflow-wrap:anywhere;
 }
 
 .spotifyLink{
-    text-decoration:none;
-    font-size:22px;
-    margin-left:10px;
+  flex:0 0 auto;
+  text-decoration:none;
+  font-size:22px;
+  margin-left:auto;
 }
 
 .spotifyLink:hover{
-    transform:scale(1.2);
+  transform:scale(1.2);
 }
