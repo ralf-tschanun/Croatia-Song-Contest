@@ -1,5 +1,15 @@
 let pendingPayload = null;
 
+const SUBMIT_FINAL_LABEL = "Send your Vote";
+const SUBMIT_SENDING_LABEL = "⏳ sending...";
+
+function setSubmitButtonSending(isSending) {
+  const btn = document.getElementById("submitBtn");
+  if (!btn) return;
+  btn.disabled = isSending;
+  btn.textContent = isSending ? SUBMIT_SENDING_LABEL : SUBMIT_FINAL_LABEL;
+}
+
 function getChoices() {
   return ["p5","p4","p3","p2","p1"].map(id => ({
     id,
@@ -18,7 +28,7 @@ function validateChoices() {
 
   document.getElementById("submitBtn").disabled = !!dup || !allChosen || !nameOk || !configOk;
 
-  if (dup) showMsg("err", "Bitte jeden Song nur einmal auswählen.");
+  if (dup) showMsg("err", "Please select each song only once.");
   else hideMsg();
 }
 
@@ -54,7 +64,7 @@ function lockVoting() {
 function setVotingCompletedUI() {
   lockVoting();
   const btn = document.getElementById("submitBtn");
-  btn.textContent = "✅ Voting abgeschlossen";
+  btn.textContent = "✅ Voting complete";
   btn.classList.add("completed");
   btn.disabled = true;
 }
@@ -64,10 +74,10 @@ function submitVote() {
   const choices = getChoices();
   const selected = choices.map(c => c.song).filter(Boolean);
 
-  if (!voter) return showMsg("err", "Bitte wähle deinen Namen aus.");
-  if (selected.length !== 5) return showMsg("err", "Bitte alle Punkte vergeben.");
-  if (new Set(selected).size !== 5) return showMsg("err", "Bitte jeden Song nur einmal wählen.");
-  if (!API_URL) return showMsg("err", "API_URL ist noch leer. Trage zuerst die Google-Apps-Script-URL in js/config.js ein.");
+  if (!voter) return showMsg("err", "Please select your name.");
+  if (selected.length !== 5) return showMsg("err", "Please assign all points.");
+  if (new Set(selected).size !== 5) return showMsg("err", "Please select each song only once.");
+  if (!API_URL) return showMsg("err", "API_URL is not configured yet. Please add the Google Apps Script URL in js/config.js.");
 
   pendingPayload = {
     eventId: EVENT_ID,
@@ -95,7 +105,7 @@ async function confirmFinalSubmit() {
   closeConfirmModal();
 
   try {
-    document.getElementById("submitBtn").disabled = true;
+    setSubmitButtonSending(true);
 
     await fetch(API_URL, {
       method: "POST",
@@ -106,9 +116,10 @@ async function confirmFinalSubmit() {
 
     storeFinalVote(payloadToSend.voter, getChoices());
     setVotingCompletedUI();
-    showMsg("ok", "Vielen Dank! Dein Voting wurde erfolgreich gespeichert.");
+    showMsg("ok", "Thank you! Your vote was saved successfully.");
   } catch (e) {
-    showMsg("err", "Senden fehlgeschlagen. Bitte Verbindung prüfen.");
+    showMsg("err", "Submission failed. Please check your connection.");
+    setSubmitButtonSending(false);
     validateChoices();
   } finally {
     pendingPayload = null;

@@ -1,17 +1,26 @@
 async function init() {
+  if (location.protocol === "file:") {
+    showMsg(
+      "err",
+      "This page cannot be opened directly as a file. Please start a local server (e.g. python3 -m http.server 8080) or use the GitHub Pages URL."
+    );
+    return;
+  }
+
   await loadConfig();
 
   fillVoterSelect();
   ["p5","p4","p3","p2","p1"].forEach(id => fillSelect(document.getElementById(id)));
   document.querySelectorAll("select").forEach(s => s.addEventListener("change", validateChoices));
   renderSongList();
+  bindSongListClicks();
   loadStoredFinalVote();
   validateChoices();
 
   if (localStorage.getItem(storageKeyFinal) === "true") {
     loadStoredFinalVote();
     setVotingCompletedUI();
-    showMsg("ok", "Du hast dein Voting bereits final abgeschickt.");
+    showMsg("ok", "You have already submitted your final vote.");
   }
 }
 
@@ -39,7 +48,7 @@ function jsonp(url) {
 
 async function loadConfig() {
   if (!API_URL) {
-    showMsg("err", "API_URL ist noch leer. Trage zuerst die Google-Apps-Script-URL in js/config.js ein.");
+    showMsg("err", "API_URL is not configured yet. Please add the Google Apps Script URL in js/config.js.");
     return;
   }
 
@@ -48,24 +57,24 @@ async function loadConfig() {
     SONGS = data.songs || [];
     VOTERS = data.voters || [];
 
-    if (SONGS.length === 0) showMsg("err", "Keine Songs gefunden. Bitte im Google Sheet den Tab 'Songs' befüllen.");
-    if (VOTERS.length === 0) showMsg("err", "Keine Teilnehmer gefunden. Bitte im Google Sheet den Tab 'Teilnehmer' befüllen.");
+    if (SONGS.length === 0) showMsg("err", "No songs found. Please fill in the 'Songs' tab in the Google Sheet.");
+    if (VOTERS.length === 0) showMsg("err", "No participants found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
   } catch (e) {
-    showMsg("err", "Songs/Teilnehmer konnten nicht aus Google Sheets geladen werden.");
+    showMsg("err", "Could not load songs/participants from Google Sheets.");
     console.error(e);
   }
 }
 
 function fillVoterSelect() {
   const sel = document.getElementById("voterName");
-  sel.innerHTML = '<option value="">Bitte Namen auswählen</option>' + VOTERS.map(name =>
+  sel.innerHTML = '<option value="">Please select your name</option>' + VOTERS.map(name =>
     `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
   ).join("");
 }
 
 function fillSelect(sel) {
   sel.innerHTML =
-    '<option value="">Bitte wählen</option>' +
+    '<option value="">Please choose</option>' +
     SONGS.map((song,i)=>
       `<option value="${escapeHtml(song.title)}">${i+1}. ${escapeHtml(song.title)}</option>`
     ).join("");
@@ -80,7 +89,7 @@ function renderSongList() {
   <span class="songTitle">${escapeHtml(song.title)}</span>
   ${
     song.spotify
-    ? `<a class="spotifyLink" href="${song.spotify}" target="_blank" title="Auf Spotify öffnen">🎧</a>`
+    ? `<a class="spotifyLink" href="${escapeHtml(song.spotify)}" target="_blank" rel="noopener noreferrer" title="Open on Spotify" data-song="${escapeHtml(song.title)}">🎧</a>`
     : ""
   }
 </div>
@@ -88,14 +97,31 @@ function renderSongList() {
   `).join("");
 }
 
+function bindSongListClicks() {
+  document.getElementById("songList").addEventListener("click", (e) => {
+    const link = e.target.closest(".spotifyLink");
+    if (!link) return;
+
+    document.querySelectorAll(".spotifyLink.active").forEach(el => el.classList.remove("active"));
+    link.classList.add("active");
+  });
+}
+
+function setActiveTab(tab) {
+  document.getElementById("tabVoteBtn").classList.toggle("active", tab === "vote");
+  document.getElementById("tabResultsBtn").classList.toggle("active", tab === "results");
+}
+
 function showVote(){
   document.getElementById("voteView").style.display="block";
   document.getElementById("resultsView").style.display="none";
+  setActiveTab("vote");
 }
 
 function showResults(){
   document.getElementById("voteView").style.display="none";
   document.getElementById("resultsView").style.display="block";
+  setActiveTab("results");
   loadResults();
 }
 
