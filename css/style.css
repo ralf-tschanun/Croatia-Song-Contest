@@ -42,9 +42,9 @@ button.completed{background:var(--success);color:white;opacity:1;cursor:not-allo
 .result-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
 .stat{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:16px;padding:12px}
 .stat-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.stat-head b,
-.stat > b{font-size:24px;color:var(--accent);line-height:1.1;display:block}
-.stat-label{display:block;margin-top:6px;color:var(--muted);font-size:13px;line-height:1.35}
+.stat-inline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.stat-inline b{font-size:24px;color:var(--accent);line-height:1.1;flex:0 0 auto}
+.stat-label{display:inline;margin:0;color:var(--muted);font-size:13px;line-height:1.35}
 .stat-expand-btn{width:auto;min-width:36px;margin:0;padding:6px 10px;font-size:14px;line-height:1;background:rgba(255,255,255,.04);color:var(--text);border:1px solid var(--border);font-weight:700}
 .stat-expand-btn:hover{background:rgba(255,255,255,.08)}
 .stat-details{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);text-align:left}

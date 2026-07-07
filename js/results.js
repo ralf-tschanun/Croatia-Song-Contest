@@ -91,7 +91,10 @@ function renderResults(data) {
     <div class="result-stats">
       <div class="stat">
         <div class="stat-head">
-          <b>${votingCount} / ${voterTotal}</b>
+          <div class="stat-inline">
+            <b>${votingCount} / ${voterTotal}</b>
+            <span class="stat-label">Votes received</span>
+          </div>
           <button
             type="button"
             id="voterDetailsToggle"
@@ -102,7 +105,6 @@ function renderResults(data) {
             title="Show voter list"
           >▼</button>
         </div>
-        <span class="stat-label">Votes received</span>
         <div id="voterDetailsPanel" class="stat-details" hidden>
           <div class="voter-group">
             <h4>Already voted</h4>
@@ -115,8 +117,10 @@ function renderResults(data) {
         </div>
       </div>
       <div class="stat">
-        <b>${totalPoints} / ${maxPossiblePoints}</b>
-        <span class="stat-label">Points awarded</span>
+        <div class="stat-inline">
+          <b>${totalPoints} / ${maxPossiblePoints}</b>
+          <span class="stat-label">Points awarded</span>
+        </div>
       </div>
     </div>
     <table>
