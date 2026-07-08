@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>A'Croatia 2026 – Song Contest</title>
-  <link rel="stylesheet" href="css/style.css?v=18" />
+  <link rel="stylesheet" href="css/style.css?v=26" />
 </head>
 <body>
   <div class="wrap">
@@ -42,7 +42,21 @@
       </div>
 
       <button id="submitBtn" onclick="submitVote()">Send your Vote</button>
-      <div id="message" class="msg"></div>
+      <div id="message" class="msg vote-message"></div>
+
+      <div class="best-ever-section">
+        <h3 class="best-ever-heading">Your Best Ever Song</h3>
+        <p class="small">Search Deezer and submit your all-time favourite song once.</p>
+
+        <label for="bestEverSearch">Search for a song</label>
+        <input id="bestEverSearch" type="search" placeholder="Song or artist..." autocomplete="off" />
+
+        <div id="bestEverResults" class="best-ever-results"></div>
+        <div id="bestEverSelected" class="best-ever-selected" style="display:none"></div>
+
+        <button id="bestEverSubmitBtn" type="button" onclick="submitBestEver()">Submit Best Ever Song</button>
+        <div id="bestEverMessage" class="msg"></div>
+      </div>
     </section>
 
     <section id="resultsView" class="card" style="display:none">
@@ -103,9 +117,23 @@
     </div>
   </div>
 
-  <script src="js/config.js?v=18"></script>
-  <script src="js/app.js?v=18"></script>
-  <script src="js/voting.js?v=18"></script>
-  <script src="js/results.js?v=18"></script>
+  <div id="bestEverConfirmOverlay" class="modal-overlay" style="display:none">
+    <div class="modal">
+      <p id="bestEverConfirmVoterName" class="confirm-voter-name"></p>
+      <h2>🎤 Submit your best ever song!</h2>
+      <p class="small">After submitting, your choice cannot be changed.</p>
+      <div id="bestEverConfirmSummary" class="confirm-vote-summary"></div>
+      <div class="modal-actions">
+        <button class="secondary" onclick="closeBestEverConfirmModal()">Cancel</button>
+        <button onclick="confirmBestEverSubmit()">Yes, submit now</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/config.js?v=26"></script>
+  <script src="js/app.js?v=26"></script>
+  <script src="js/voting.js?v=26"></script>
+  <script src="js/best-ever.js?v=26"></script>
+  <script src="js/results.js?v=26"></script>
 </body>
 </html>

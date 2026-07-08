@@ -36,11 +36,43 @@ button{cursor:pointer;background:linear-gradient(135deg,var(--accent),#ff9d5a);c
 button.secondary{background:#0f1530;color:var(--text);border:1px solid var(--border)}
 button:disabled{opacity:.55;cursor:not-allowed}
 button.completed{background:var(--success);color:white;opacity:1;cursor:not-allowed}
+.vote-message{margin-top:12px}
 .msg{padding:12px 14px;border-radius:14px;margin-top:12px;display:none}
 .msg.ok{display:block;background:rgba(124,255,178,.12);border:1px solid rgba(124,255,178,.35);color:var(--ok)}
 .msg.err{display:block;background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.35);color:var(--danger)}
 .songlist{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}
-.song{padding:10px 12px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:12px}
+.song{
+  padding:10px 12px;
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+  border-radius:12px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.song-line{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:0;
+}
+
+.song-title{
+  font-weight:700;
+  color:#fff;
+  line-height:1.3;
+}
+
+.song-artist{
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.3;
+}
+
+.result-song-cell .song-line{
+  gap:2px;
+}
 .small{color:var(--muted);font-size:13px;line-height:1.45}
 .reset-browser-vote{margin-top:12px;text-align:center}
 .reset-browser-vote a{color:var(--muted);font-size:12px;text-decoration:underline;opacity:.75}
@@ -81,6 +113,7 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
 .confirm-points-value{font-size:22px;font-weight:900;color:var(--accent)}
 .confirm-points-label{font-size:13px;font-weight:600;color:var(--muted)}
 .confirm-song{flex:1 1 auto;font-size:14px;line-height:1.35;text-align:left;overflow-wrap:anywhere}
+.confirm-song-stack{display:flex;flex-direction:column;gap:4px}
 .modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .rules-modal{width:min(560px,100%);max-height:85vh;overflow-y:auto;text-align:left}
 .rules-modal h2{margin-top:0;text-align:center;color:var(--text)}
@@ -194,7 +227,7 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
   flex:0 0 auto;
 }
 
-.song .songTitle{
+.song .song-line{
   flex:1 1 auto;
   min-width:0;
   text-align:left;
@@ -219,4 +252,97 @@ footer{color:var(--muted);text-align:center;padding:24px 0 40px;font-size:13px}
   background:rgba(124,255,178,.18);
   box-shadow:0 0 0 2px var(--ok);
   filter:hue-rotate(85deg) saturate(2.4);
+}
+
+.best-ever-section{
+  margin-top:22px;
+  padding-top:20px;
+  border-top:1px solid var(--border);
+}
+
+.best-ever-heading{
+  margin:0 0 6px;
+  font-size:20px;
+  color:var(--accent);
+}
+
+.best-ever-results{
+  display:grid;
+  gap:8px;
+  margin-top:10px;
+}
+
+.best-ever-result{
+  width:100%;
+  margin:0;
+  padding:12px 14px;
+  text-align:left;
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+  color:var(--text);
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.best-ever-result:hover{
+  background:rgba(255,255,255,.08);
+  border-color:rgba(96,214,255,.35);
+}
+
+.best-ever-result-title{
+  font-weight:700;
+  line-height:1.3;
+}
+
+.best-ever-result-artist{
+  color:var(--muted);
+  font-size:14px;
+}
+
+.best-ever-selected{
+  margin-top:12px;
+  padding:12px 14px;
+  background:rgba(255,207,90,.08);
+  border:1px solid rgba(255,207,90,.25);
+  border-radius:14px;
+}
+
+.best-ever-selected-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.best-ever-selected-text{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:0;
+}
+
+.best-ever-artist{
+  color:var(--muted);
+  font-size:14px;
+}
+
+.best-ever-preview{
+  flex:0 0 auto;
+  color:var(--accent);
+  text-decoration:none;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+.best-ever-preview:hover{
+  text-decoration:underline;
+}
+
+.best-ever-empty{
+  margin:8px 0 0;
+}
+
+#bestEverSubmitBtn{
+  margin-top:14px;
 }

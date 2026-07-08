@@ -66,11 +66,16 @@ function renderResults(data) {
     if (r.song) pointsBySong[r.song] = Number(r.points) || 0;
   });
 
-  const ordered = SONGS.map((song, idx) => ({
-    song: song.title,
-    points: pointsBySong[song.title] || 0,
-    originalIndex: idx
-  }))
+  const ordered = SONGS.map((song, idx) => {
+    const parsed = normalizeSong(song);
+    return {
+      song: parsed.label,
+      title: parsed.title,
+      artist: parsed.artist,
+      points: pointsBySong[parsed.label] || pointsBySong[parsed.title] || pointsBySong[getSongApiKey(song)] || 0,
+      originalIndex: idx
+    };
+  })
   .sort((a,b) => b.points - a.points || a.originalIndex - b.originalIndex);
 
   const totalPoints = ordered.reduce((sum, r) => sum + (Number(r.points) || 0), 0);
@@ -123,7 +128,7 @@ function renderResults(data) {
         ${ordered.map((r,i)=>`
           <tr>
             <td class="rank">${i+1}</td>
-            <td>${escapeHtml(r.song)}</td>
+            <td class="result-song-cell">${renderSongLineHtml({ title: r.title, artist: r.artist })}</td>
             <td><b>${r.points}</b></td>
             <td><div class="bar"><span style="width:${Math.round((r.points/max)*100)}%"></span></div></td>
           </tr>`).join("")}

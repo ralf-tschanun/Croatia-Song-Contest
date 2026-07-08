@@ -134,6 +134,17 @@ function setVotingCompletedUI() {
 function handleVoterSelection() {
   const voter = document.getElementById("voterName").value.trim();
 
+  if (hasLockedBrowserVoter()) {
+    const lockedVoter = getLockedBrowserVoter();
+    if (voter !== lockedVoter) {
+      applyBrowserVoterLock();
+      showMsg("err", BROWSER_LOCKED_MSG);
+    } else if (hasLocalFinalVote()) {
+      syncLockedVotingState();
+    }
+    return;
+  }
+
   if (hasLocalFinalVote()) {
     syncLockedVotingState();
     return;
@@ -149,7 +160,7 @@ function handleVoterSelection() {
   }
 
   unlockVoteInputs();
-  unlockVoterSelect();
+  if (!hasLockedBrowserVoter()) unlockVoterSelect();
   hideMsg();
   validateChoices();
 }
@@ -159,14 +170,26 @@ async function refreshVotingSession() {
   clearOrphanedLocalStorage();
   fillVoterSelect();
 
-  if (!hasLocalFinalVote()) {
-    resetVotingForm();
+  if (hasLockedBrowserVoter()) {
+    applyBrowserVoterLock();
+  }
+
+  if (hasLocalFinalVote()) {
+    syncLockedVotingState();
+    return;
+  }
+
+  if (hasLockedBrowserVoter()) {
+    clearVoteSelections();
+    unlockVoteInputs();
     hideMsg();
     validateChoices();
     return;
   }
 
-  syncLockedVotingState();
+  resetVotingForm();
+  hideMsg();
+  validateChoices();
 }
 
 function syncLockedVotingState() {
@@ -223,8 +246,11 @@ function submitVote() {
     handleVoterSelection();
     return;
   }
+  if (hasLockedBrowserVoter() && voter !== getLockedBrowserVoter()) {
+    return showMsg("err", BROWSER_LOCKED_MSG);
+  }
   if (hasLocalFinalVote() && voter !== getStoredVoter()) {
-    return showMsg("err", "This browser is locked to your selected name. Clear your browser cache to switch users.");
+    return showMsg("err", BROWSER_LOCKED_MSG);
   }
   if (selected.length !== 5) return showMsg("err", "Please assign all points.");
   if (new Set(selected).size !== 5) return showMsg("err", "Please select each song only once.");
@@ -247,7 +273,7 @@ function renderConfirmSummary(choices) {
         <span class="confirm-points-value">${c.points}</span>
         <span class="confirm-points-label">${c.points === 1 ? "point" : "points"}</span>
       </span>
-      <span class="confirm-song">${escapeHtml(c.song)}</span>
+      <span class="confirm-song">${escapeHtml(getSongDisplayLabel(c.song))}</span>
     </div>
   `).join("");
 }

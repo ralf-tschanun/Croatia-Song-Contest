@@ -12,6 +12,8 @@ async function init() {
   if (shouldResetBrowserVote) {
     localStorage.removeItem(storageKeyFinal);
     localStorage.removeItem(storageKeyVote);
+    localStorage.removeItem(storageKeyBestEverFinal);
+    localStorage.removeItem(storageKeyBestEver);
     history.replaceState({}, "", location.pathname + location.hash);
   }
 
@@ -20,10 +22,15 @@ async function init() {
   document.querySelectorAll("select").forEach(s => {
     if (s.id !== "voterName") s.addEventListener("change", validateChoices);
   });
-  document.getElementById("voterName").addEventListener("change", handleVoterSelection);
+  document.getElementById("voterName").addEventListener("change", () => {
+    handleVoterSelection();
+    onVoterChangedForBestEver();
+  });
+  bindBestEverEvents();
   renderSongList();
   bindSongListClicks();
   await refreshVotingSession();
+  await refreshBestEverSession();
 
   if (shouldResetBrowserVote) {
     showMsg("ok", "Browser voting data cleared. Please choose your name.");
@@ -78,6 +85,33 @@ function normalizeVoterName(name) {
   return String(name || "").trim().toLowerCase();
 }
 
+const BROWSER_LOCKED_MSG = "This browser is locked to your selected name. Reset browser voting data at the bottom of the page to switch users.";
+
+function getLockedBrowserVoter() {
+  if (hasLocalFinalVote()) return getStoredVoter();
+  if (hasLocalBestEverSubmit()) return getStoredBestEverVoter();
+  return "";
+}
+
+function hasLockedBrowserVoter() {
+  return !!getLockedBrowserVoter();
+}
+
+function applyBrowserVoterLock() {
+  const voter = getLockedBrowserVoter();
+  if (!voter) return false;
+
+  const sel = document.getElementById("voterName");
+  if (!sel) return false;
+
+  if (VOTERS.includes(voter)) {
+    sel.value = voter;
+  }
+
+  lockVoterSelect();
+  return true;
+}
+
 function hasVoterSubmitted(voter) {
   const key = normalizeVoterName(voter);
   if (!key) return false;
@@ -98,8 +132,9 @@ async function loadConfig() {
 
   try {
     const data = await jsonp(`${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=config`);
-    SONGS = data.songs || [];
+    SONGS = (data.songs || []).map(normalizeSong);
     VOTERS = data.voters || [];
+    BEST_EVER_VOTERS = parseBestEverVoters(data);
 
     if (SONGS.length === 0) showMsg("err", "No songs found. Please fill in the 'Songs' tab in the Google Sheet.");
     if (VOTERS.length === 0) showMsg("err", "No participants found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
@@ -122,26 +157,31 @@ function fillVoterSelect() {
 function fillSelect(sel) {
   sel.innerHTML =
     '<option value="">Please choose</option>' +
-    SONGS.map((song,i)=>
-      `<option value="${escapeHtml(song.title)}">${i+1}. ${escapeHtml(song.title)}</option>`
-    ).join("");
+    SONGS.map((song, i) => {
+      const label = getSongVoteKey(song);
+      const value = getSongApiKey(song);
+      return `<option value="${escapeHtml(value)}">${i + 1}. ${escapeHtml(label)}</option>`;
+    }).join("");
 }
 
 function renderSongList() {
   document.getElementById("songList").innerHTML =
-  SONGS.map((song,i)=>`
+  SONGS.map((song, i) => {
+    const key = getSongVoteKey(song);
+    const preview = song.preview || song.spotify || "";
 
+    return `
   <div class="song">
-  <b>${i+1}.</b>
-  <span class="songTitle">${escapeHtml(song.title)}</span>
+  <b>${i + 1}.</b>
+  ${renderSongLineHtml(song)}
   ${
-    song.spotify
-    ? `<a class="spotifyLink" href="${escapeHtml(song.spotify)}" target="_blank" rel="noopener noreferrer" title="Open on Spotify" data-song="${escapeHtml(song.title)}">🎧</a>`
-    : ""
+    preview
+      ? `<a class="spotifyLink" href="${escapeHtml(preview)}" target="_blank" rel="noopener noreferrer" title="Preview song" data-song="${escapeHtml(key)}">🎧</a>`
+      : ""
   }
 </div>
-
-  `).join("");
+    `;
+  }).join("");
 }
 
 function bindSongListClicks() {
@@ -172,6 +212,7 @@ function showVote(){
   document.getElementById("resultsView").style.display="none";
   setActiveTab("vote");
   refreshVotingSession();
+  refreshBestEverSession();
 }
 
 function showResults(){
@@ -197,6 +238,84 @@ function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+function formatSongDisplayTitle(title, artist) {
+  const songTitle = String(title || "").trim();
+  const songArtist = String(artist || "").trim();
+  if (songTitle && songArtist) return `${songTitle} - ${songArtist}`;
+  return songTitle || songArtist;
+}
+
+function normalizeSong(song) {
+  let title = String(song?.title || "").trim();
+  let artist = String(song?.artist || song?.interpret || "").trim();
+  let preview = String(song?.preview || "").trim();
+  const voter = String(song?.voter || "").trim();
+  const nr = song?.nr;
+  const spotifyRaw = String(song?.spotify || "").trim();
+
+  // Old API mapped the Interpret column into spotify when the sheet already used Title + Interpret.
+  if (!artist && spotifyRaw && !/^https?:\/\//i.test(spotifyRaw)) {
+    artist = spotifyRaw;
+  }
+
+  // Legacy combined value in one field: "Title - Interpret"
+  if (!artist && title.includes(" - ")) {
+    const parts = title.split(" - ");
+    title = String(parts[0] || "").trim();
+    artist = String(parts.slice(1).join(" - ") || "").trim();
+  }
+
+  if (!preview && /^https?:\/\//i.test(spotifyRaw)) {
+    preview = spotifyRaw;
+  }
+
+  const label = String(song?.label || "").trim() || formatSongDisplayTitle(title, artist);
+
+  return {
+    ...song,
+    nr,
+    title,
+    artist,
+    preview,
+    voter,
+    label,
+    spotify: preview || spotifyRaw
+  };
+}
+
+function getSongVoteKey(song) {
+  return normalizeSong(song).label;
+}
+
+function getSongApiKey(song) {
+  const parsed = normalizeSong(song);
+  // New API returns an explicit label; legacy API validates against title only.
+  if (String(song?.label || "").trim()) return parsed.label;
+  return parsed.title;
+}
+
+function getSongDisplayLabel(apiKey) {
+  const match = SONGS.find(song => getSongApiKey(song) === apiKey);
+  return match ? getSongVoteKey(match) : apiKey;
+}
+
+function renderSongLineHtml(song) {
+  const parsed = normalizeSong(song);
+  const title = parsed.title;
+  const artist = parsed.artist;
+
+  if (!title && !artist) {
+    return `<span class="song-title">${escapeHtml(parsed.label)}</span>`;
+  }
+
+  return `
+    <span class="song-line">
+      <strong class="song-title">${escapeHtml(title)}</strong>
+      ${artist ? `<span class="song-artist">${escapeHtml(artist)}</span>` : ""}
+    </span>
+  `;
+}
+
 let initComplete = false;
 
 async function boot() {
@@ -209,4 +328,5 @@ boot();
 window.addEventListener("pageshow", () => {
   if (!initComplete) return;
   refreshVotingSession();
+  refreshBestEverSession();
 });
