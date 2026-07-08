@@ -86,10 +86,24 @@ function submitVote() {
     submittedAt: new Date().toISOString()
   };
 
-  openConfirmModal();
+  openConfirmModal(choices);
 }
 
-function openConfirmModal() {
+function renderConfirmSummary(choices) {
+  return choices.map(c => `
+    <div class="confirm-vote-row">
+      <span class="confirm-points">
+        <span class="confirm-points-value">${c.points}</span>
+        <span class="confirm-points-label">${c.points === 1 ? "point" : "points"}</span>
+      </span>
+      <span class="confirm-song">${escapeHtml(c.song)}</span>
+    </div>
+  `).join("");
+}
+
+function openConfirmModal(choices) {
+  const summary = document.getElementById("confirmVoteSummary");
+  if (summary) summary.innerHTML = renderConfirmSummary(choices);
   document.getElementById("confirmOverlay").style.display = "flex";
 }
 

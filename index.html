@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>A'Croatia 2026 – Song Contest</title>
-  <link rel="stylesheet" href="css/style.css?v=2" />
+  <link rel="stylesheet" href="css/style.css?v=3" />
 </head>
 <body>
   <div class="wrap">
@@ -61,8 +61,9 @@
 
   <div id="confirmOverlay" class="modal-overlay" style="display:none">
     <div class="modal">
-      <h2>🎤 Submit your vote for good?</h2>
-      <p>After submitting, your vote cannot be changed.</p>
+      <h2>🎤 Submit your vote now!</h2>
+      <p class="small">After submitting, your vote cannot be changed.</p>
+      <div id="confirmVoteSummary" class="confirm-vote-summary"></div>
       <div class="modal-actions">
         <button class="secondary" onclick="closeConfirmModal()">Cancel</button>
         <button onclick="confirmFinalSubmit()">Yes, submit vote</button>
@@ -70,9 +71,9 @@
     </div>
   </div>
 
-  <script src="js/config.js?v=2"></script>
-  <script src="js/app.js?v=2"></script>
-  <script src="js/voting.js?v=2"></script>
-  <script src="js/results.js?v=2"></script>
+  <script src="js/config.js?v=3"></script>
+  <script src="js/app.js?v=3"></script>
+  <script src="js/voting.js?v=3"></script>
+  <script src="js/results.js?v=3"></script>
 </body>
 </html>
