@@ -188,50 +188,38 @@ function renderBestEverResults(tracks) {
   });
 }
 
-async function searchBestEverTracksItunes(query) {
-  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=10`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("Song search failed");
-
-  const data = await response.json();
-  return (data.results || [])
-    .map((track, index) => ({
-      id: track.trackId || `itunes-${index}-${track.trackName}`,
-      title: String(track.trackName || "").trim(),
-      artist: String(track.artistName || "").trim(),
-      preview: String(track.previewUrl || "").trim(),
-      link: String(track.trackViewUrl || "").trim()
-    }))
-    .filter(track => track.title && track.artist);
+function buildBestEverSearchUrl(action, query) {
+  return `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=${action}&q=${encodeURIComponent(query)}`;
 }
 
-function shouldUseItunesSearchFallback(errorMessage) {
-  const msg = String(errorMessage || "").toLowerCase();
-  return msg.includes("urlfetchapp") ||
-    msg.includes("external_request") ||
-    msg.includes("berechtigung") ||
-    msg.includes("permission");
+function formatBestEverSearchError(error) {
+  const message = String(error?.message || error || "").trim().toLowerCase();
+  if (!message || message === "load failed" || message === "failed to fetch") {
+    return "Song search failed. Please check your connection and try again.";
+  }
+  return String(error?.message || error || "Song search failed. Please try again.");
+}
+
+async function searchBestEverTracksViaApi(action, query) {
+  const data = await jsonp(buildBestEverSearchUrl(action, query));
+  if (data?.ok && Array.isArray(data.tracks)) return data.tracks;
+  throw new Error(data?.error || `${action} failed`);
 }
 
 async function searchBestEverTracks(query) {
+  let deezerError = null;
+
   try {
-    const data = await jsonp(
-      `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=deezerSearch&q=${encodeURIComponent(query)}`
-    );
-
-    if (data?.ok && Array.isArray(data.tracks)) return data.tracks;
-
-    const apiError = data?.error || "Deezer search failed";
-    if (shouldUseItunesSearchFallback(apiError)) {
-      return searchBestEverTracksItunes(query);
-    }
-
-    throw new Error(apiError);
+    return await searchBestEverTracksViaApi("deezerSearch", query);
   } catch (e) {
-    if (shouldUseItunesSearchFallback(e.message)) {
-      return searchBestEverTracksItunes(query);
-    }
-    throw e;
+    deezerError = e;
+    console.warn("Deezer search failed, trying iTunes proxy", e);
+  }
+
+  try {
+    return await searchBestEverTracksViaApi("itunesSearch", query);
+  } catch (e) {
+    throw new Error(formatBestEverSearchError(e.message || deezerError?.message));
   }
 }
 
@@ -254,8 +242,7 @@ function handleBestEverSearchInput() {
       const tracks = await searchBestEverTracks(query);
       renderBestEverResults(tracks);
     } catch (e) {
-      const message = String(e?.message || "").trim();
-      showBestEverMsg("err", message || "Song search failed. Please try again.");
+      showBestEverMsg("err", formatBestEverSearchError(e));
       console.error(e);
     }
   }, 300);

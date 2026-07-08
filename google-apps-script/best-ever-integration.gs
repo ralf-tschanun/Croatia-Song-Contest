@@ -151,10 +151,46 @@ function searchDeezerTracks_(query) {
   }
 }
 
+function searchItunesTracks_(query) {
+  const q = String(query || "").trim();
+  if (q.length < 2) return { ok: true, tracks: [] };
+
+  try {
+    const url = "https://itunes.apple.com/search?term=" + encodeURIComponent(q) + "&media=music&entity=song&limit=10";
+    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const status = response.getResponseCode();
+
+    if (status < 200 || status >= 300) {
+      return { ok: false, error: "iTunes search failed (" + status + ")" };
+    }
+
+    const data = JSON.parse(response.getContentText());
+    const tracks = (data.results || [])
+      .map(function(track, index) {
+        return {
+          id: track.trackId || ("itunes-" + index + "-" + track.trackName),
+          title: String(track.trackName || "").trim(),
+          artist: String(track.artistName || "").trim(),
+          preview: String(track.previewUrl || "").trim(),
+          link: String(track.trackViewUrl || "").trim()
+        };
+      })
+      .filter(function(track) { return track.title && track.artist; });
+
+    return { ok: true, tracks: tracks };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
 // --- Extend doGet: ---
 //
 // if (action === "deezerSearch") {
 //   return json_(searchDeezerTracks_(e.parameter.q || ""), e.parameter.callback);
+// }
+//
+// if (action === "itunesSearch") {
+//   return json_(searchItunesTracks_(e.parameter.q || ""), e.parameter.callback);
 // }
 //
 // return json_({
