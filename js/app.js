@@ -7,20 +7,26 @@ async function init() {
     return;
   }
 
-  await loadConfig();
+  const shouldResetBrowserVote = new URLSearchParams(location.search).get("reset") === "1";
 
-  fillVoterSelect();
+  if (shouldResetBrowserVote) {
+    localStorage.removeItem(storageKeyFinal);
+    localStorage.removeItem(storageKeyVote);
+    history.replaceState({}, "", location.pathname + location.hash);
+  }
+
+  await loadConfig();
   ["p5","p4","p3","p2","p1"].forEach(id => fillSelect(document.getElementById(id)));
-  document.querySelectorAll("select").forEach(s => s.addEventListener("change", validateChoices));
+  document.querySelectorAll("select").forEach(s => {
+    if (s.id !== "voterName") s.addEventListener("change", validateChoices);
+  });
+  document.getElementById("voterName").addEventListener("change", handleVoterSelection);
   renderSongList();
   bindSongListClicks();
-  loadStoredFinalVote();
-  validateChoices();
+  await refreshVotingSession();
 
-  if (localStorage.getItem(storageKeyFinal) === "true") {
-    loadStoredFinalVote();
-    setVotingCompletedUI();
-    showMsg("ok", "You have already submitted your final vote.");
+  if (shouldResetBrowserVote) {
+    showMsg("ok", "Browser voting data cleared. Please choose your name.");
   }
 }
 
@@ -46,6 +52,44 @@ function jsonp(url) {
   });
 }
 
+async function loadVotedVoters() {
+  if (!API_URL) return;
+
+  try {
+    const data = await jsonp(`${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=results`);
+    VOTED_VOTERS = parseVotedVoters(data);
+  } catch (e) {
+    console.warn("Could not load submitted voters", e);
+    VOTED_VOTERS = [];
+  }
+}
+
+function parseVotedVoters(data) {
+  const raw = data?.votedVoters ?? data?.submittedVoters ?? data?.votersVoted ?? [];
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(entry => (typeof entry === "string" ? entry : entry?.voter || entry?.name || ""))
+    .map(name => String(name).trim())
+    .filter(Boolean);
+}
+
+function normalizeVoterName(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function hasVoterSubmitted(voter) {
+  const key = normalizeVoterName(voter);
+  if (!key) return false;
+  return VOTED_VOTERS.some(name => normalizeVoterName(name) === key);
+}
+
+function addVoterToSubmittedList(voter) {
+  const name = String(voter || "").trim();
+  if (!name || hasVoterSubmitted(name)) return;
+  VOTED_VOTERS.push(name);
+}
+
 async function loadConfig() {
   if (!API_URL) {
     showMsg("err", "API_URL is not configured yet. Please add the Google Apps Script URL in js/config.js.");
@@ -67,9 +111,12 @@ async function loadConfig() {
 
 function fillVoterSelect() {
   const sel = document.getElementById("voterName");
+
+  sel.disabled = false;
   sel.innerHTML = '<option value="">Please select your name</option>' + VOTERS.map(name =>
     `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
   ).join("");
+  sel.selectedIndex = 0;
 }
 
 function fillSelect(sel) {
@@ -112,10 +159,19 @@ function setActiveTab(tab) {
   document.getElementById("tabResultsBtn").classList.toggle("active", tab === "results");
 }
 
+function openRulesModal() {
+  document.getElementById("rulesOverlay").style.display = "flex";
+}
+
+function closeRulesModal() {
+  document.getElementById("rulesOverlay").style.display = "none";
+}
+
 function showVote(){
   document.getElementById("voteView").style.display="block";
   document.getElementById("resultsView").style.display="none";
   setActiveTab("vote");
+  refreshVotingSession();
 }
 
 function showResults(){
@@ -141,4 +197,16 @@ function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
-init();
+let initComplete = false;
+
+async function boot() {
+  await init();
+  initComplete = true;
+}
+
+boot();
+
+window.addEventListener("pageshow", () => {
+  if (!initComplete) return;
+  refreshVotingSession();
+});

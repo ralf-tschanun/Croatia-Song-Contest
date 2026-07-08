@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>A'Croatia 2026 – Song Contest</title>
-  <link rel="stylesheet" href="css/style.css?v=3" />
+  <link rel="stylesheet" href="css/style.css?v=18" />
 </head>
 <body>
   <div class="wrap">
@@ -16,8 +16,9 @@
       <span>A'Croatia <span>2026</span></span>
   </h1>
 
-  <div class="sub">
-      Song Contest Voting
+  <div class="sub-row">
+    <div class="sub">Song Contest Voting</div>
+    <button type="button" class="rules-btn secondary" onclick="openRulesModal()" aria-label="Show rules">Rules</button>
   </div>
       <div class="tabs">
         <button id="tabVoteBtn" class="secondary active" onclick="showVote()">Voting</button>
@@ -25,12 +26,12 @@
       </div>
     </header>
 
-    <section id="voteView" class="card">
+    <section id="voteView" class="card" autocomplete="off">
       <h2>Your Vote</h2>
       <p class="small">Assign your points to five different songs. Each song can only be selected once.</p>
 
       <label for="voterName">Your Name</label>
-      <select id="voterName"></select>
+      <select id="voterName" autocomplete="off"></select>
 
       <div class="grid">
         <div><label><span class="points">5</span> points</label><select id="p5"></select></div>
@@ -56,11 +57,42 @@
       <div id="songList" class="songlist"></div>
     </section>
 
-    <footer>Built for A'Croatia 2026 · Hosted on GitHub Pages</footer>
+    <footer>
+      Built for A'Croatia 2026 · Hosted on GitHub Pages
+      <p class="small reset-browser-vote">
+        <a href="?reset=1">Reset browser voting data</a>
+      </p>
+    </footer>
+  </div>
+
+  <div id="rulesOverlay" class="modal-overlay" style="display:none">
+    <div class="modal rules-modal">
+      <h2>The Rules</h2>
+      <ul class="rules-list">
+        <li>Listen to all the songs.</li>
+        <li>Rank your Top 5 favorite songs.</li>
+      </ul>
+
+      <h3>Tie-breaker Round</h3>
+      <p>If two or more songs receive the same number of points, or if one or more songs receive 0 points, an additional voting round will be held.</p>
+      <ul class="rules-list">
+        <li>The second round will include only new songs, with the number of new songs matching the number of tied or zero-point songs.</li>
+        <li>If there are still ties or songs with 0 points after the second round, a third voting round will be held following the same procedure.</li>
+      </ul>
+
+      <h3>Most importantly:</h3>
+      <ul class="rules-list rules-list-highlight">
+        <li>Feel free to dance and sing along! 🎶</li>
+        <li>Have an amazing time together in Croatia! 🇭🇷</li>
+      </ul>
+
+      <button type="button" class="rules-got-it secondary" onclick="closeRulesModal()">Got it</button>
+    </div>
   </div>
 
   <div id="confirmOverlay" class="modal-overlay" style="display:none">
     <div class="modal">
+      <p id="confirmVoterName" class="confirm-voter-name"></p>
       <h2>🎤 Submit your vote now!</h2>
       <p class="small">After submitting, your vote cannot be changed.</p>
       <div id="confirmVoteSummary" class="confirm-vote-summary"></div>
@@ -71,9 +103,9 @@
     </div>
   </div>
 
-  <script src="js/config.js?v=3"></script>
-  <script src="js/app.js?v=3"></script>
-  <script src="js/voting.js?v=3"></script>
-  <script src="js/results.js?v=3"></script>
+  <script src="js/config.js?v=18"></script>
+  <script src="js/app.js?v=18"></script>
+  <script src="js/voting.js?v=18"></script>
+  <script src="js/results.js?v=18"></script>
 </body>
 </html>

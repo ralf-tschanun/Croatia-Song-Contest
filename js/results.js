@@ -10,13 +10,7 @@ function setRefreshResultsButtonState(isLoading) {
 }
 
 function getVotedVoters(data) {
-  const raw = data.votedVoters ?? data.submittedVoters ?? data.votersVoted ?? [];
-  if (!Array.isArray(raw)) return [];
-
-  return raw
-    .map(entry => (typeof entry === "string" ? entry : entry?.voter || entry?.name || ""))
-    .map(name => String(name).trim())
-    .filter(Boolean);
+  return parseVotedVoters(data);
 }
 
 function buildVoterLists(votedVoters, totalVoters) {
