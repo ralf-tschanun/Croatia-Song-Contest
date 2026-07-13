@@ -20,7 +20,7 @@ function doPost(e) {
     const data = JSON.parse(e.postData.contents);
 
     if (data.action === "bestEver") {
-      return handleBestEverPost_(ss, data);
+      return json_(submitBestEver_(ss, data));
     }
 
     const votesSheet = ss.getSheetByName(SHEET_VOTES);
@@ -97,6 +97,26 @@ function doGet(e) {
     return json_(searchItunesTracks_(e.parameter.q || ""), e.parameter.callback);
   }
 
+  if (action === "bestEverSubmit") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const data = {
+        eventId: eventId,
+        voter: String(e.parameter.voter || "").trim(),
+        title: String(e.parameter.title || "").trim(),
+        artist: String(e.parameter.artist || "").trim(),
+        previewLink: String(e.parameter.previewLink || "").trim()
+      };
+      return json_(submitBestEver_(ss, data), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
   const votesSheet = ss.getSheetByName(SHEET_VOTES);
   const rows = votesSheet.getDataRange().getValues().slice(1).filter(r => r[1] === eventId);
 
@@ -160,14 +180,14 @@ function setupBestEverSheets_(ss) {
   }
 }
 
-function handleBestEverPost_(ss, data) {
+function submitBestEver_(ss, data) {
   if (!data.eventId || !data.voter || !data.title || !data.artist) {
-    return json_({ ok: false, error: "Invalid Best Ever payload" });
+    return { ok: false, error: "Invalid Best Ever payload" };
   }
 
   const validVoters = getVoters_(ss);
   if (!validVoters.includes(data.voter)) {
-    return json_({ ok: false, error: "Unknown voter" });
+    return { ok: false, error: "Unknown voter" };
   }
 
   const title = String(data.title).trim();
@@ -175,11 +195,11 @@ function handleBestEverPost_(ss, data) {
   const previewLink = String(data.previewLink || "").trim();
 
   if (hasBestEverVoterSubmitted_(ss, data.eventId, data.voter)) {
-    return json_({ ok: false, error: "This voter has already submitted a Best Ever Song." });
+    return { ok: false, error: "This voter has already submitted a Best Ever Song." };
   }
 
   if (hasBestEverSongDuplicate_(ss, title, artist)) {
-    return json_({ ok: false, error: "This song has already been submitted by another participant." });
+    return { ok: false, error: "This song has already been submitted by another participant." };
   }
 
   const submitsSheet = ss.getSheetByName(SHEET_BEST_EVER_SUBMITS);
@@ -188,7 +208,11 @@ function handleBestEverPost_(ss, data) {
 
   submitsSheet.appendRow(songRow.concat([new Date(), data.eventId]));
 
-  return json_({ ok: true, nr: nextNr });
+  return { ok: true, nr: nextNr };
+}
+
+function handleBestEverPost_(ss, data) {
+  return json_(submitBestEver_(ss, data));
 }
 
 function getNextBestEverNumber_(sheet) {
@@ -390,10 +414,12 @@ function json_(obj, callback) {
 }
 
 // Run once in the Apps Script editor to grant Deezer search permission:
-// 1. Select authorizeExternalRequests_ in the function dropdown
+// 1. Select authorizeExternalRequests in the function dropdown (no trailing _)
 // 2. Click Run and approve the permission dialog
 // 3. Deploy -> Manage deployments -> New version
-function authorizeExternalRequests_() {
+//
+// Note: Functions ending with _ are hidden from the editor Run menu by Google Apps Script.
+function authorizeExternalRequests() {
   const response = UrlFetchApp.fetch("https://api.deezer.com/search?q=test&limit=1", {
     muteHttpExceptions: true
   });

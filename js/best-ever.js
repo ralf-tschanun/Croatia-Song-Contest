@@ -3,6 +3,7 @@ const BEST_EVER_SENDING_LABEL = "⏳ sending...";
 const BEST_EVER_COMPLETE_LABEL = "✅ Best Ever Song saved";
 const BEST_EVER_ALREADY_MSG = "You have already submitted your Best Ever Song.";
 const BEST_EVER_SHEET_ALREADY_MSG = "This person has already submitted a Best Ever Song. Reset browser voting data at the bottom of the page to choose a different name.";
+const BEST_EVER_DUPLICATE_MSG = "This song has already been submitted by another participant. Please choose a different song.";
 const BEST_EVER_SEARCH_MIN = 2;
 
 let bestEverSearchTimer = null;
@@ -188,16 +189,31 @@ function renderBestEverResults(tracks) {
   });
 }
 
+function isExternalRequestPermissionError(error) {
+  const msg = String(error?.message || error || "").toLowerCase();
+  return msg.includes("urlfetchapp") ||
+    msg.includes("external_request") ||
+    msg.includes("script.external_request") ||
+    msg.includes("berechtigung") ||
+    msg.includes("permission") ||
+    msg.includes("authorization");
+}
+
 function buildBestEverSearchUrl(action, query) {
   return `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=${action}&q=${encodeURIComponent(query)}`;
 }
 
 function formatBestEverSearchError(error) {
-  const message = String(error?.message || error || "").trim().toLowerCase();
+  const raw = String(error?.message || error || "").trim();
+  const message = raw.toLowerCase();
+
+  if (isExternalRequestPermissionError(raw)) {
+    return "Song search is not available yet. Please ask the admin to authorize external requests in Google Apps Script.";
+  }
   if (!message || message === "load failed" || message === "failed to fetch") {
     return "Song search failed. Please check your connection and try again.";
   }
-  return String(error?.message || error || "Song search failed. Please try again.");
+  return raw || "Song search failed. Please try again.";
 }
 
 async function searchBestEverTracksViaApi(action, query) {
@@ -206,21 +222,50 @@ async function searchBestEverTracksViaApi(action, query) {
   throw new Error(data?.error || `${action} failed`);
 }
 
+async function searchBestEverTracksItunesClient(query) {
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=10`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Song search failed");
+
+  const data = await response.json();
+  return (data.results || [])
+    .map((track, index) => ({
+      id: track.trackId || `itunes-${index}-${track.trackName}`,
+      title: String(track.trackName || "").trim(),
+      artist: String(track.artistName || "").trim(),
+      preview: String(track.previewUrl || "").trim(),
+      link: String(track.trackViewUrl || "").trim()
+    }))
+    .filter(track => track.title && track.artist);
+}
+
 async function searchBestEverTracks(query) {
-  let deezerError = null;
+  let lastError = null;
 
   try {
     return await searchBestEverTracksViaApi("deezerSearch", query);
   } catch (e) {
-    deezerError = e;
-    console.warn("Deezer search failed, trying iTunes proxy", e);
+    lastError = e;
+    console.warn("Deezer search failed", e);
   }
 
   try {
     return await searchBestEverTracksViaApi("itunesSearch", query);
   } catch (e) {
-    throw new Error(formatBestEverSearchError(e.message || deezerError?.message));
+    lastError = e;
+    console.warn("iTunes proxy search failed", e);
   }
+
+  if (isExternalRequestPermissionError(lastError)) {
+    try {
+      return await searchBestEverTracksItunesClient(query);
+    } catch (e) {
+      lastError = e;
+      console.warn("Client iTunes search failed", e);
+    }
+  }
+
+  throw new Error(formatBestEverSearchError(lastError));
 }
 
 function handleBestEverSearchInput() {
@@ -406,6 +451,39 @@ async function submitBestEver() {
   openBestEverConfirmModal(voter, track);
 }
 
+function buildBestEverSubmitUrl(payload) {
+  return `${API_URL}?eventId=${encodeURIComponent(payload.eventId)}&action=bestEverSubmit&voter=${encodeURIComponent(payload.voter)}&title=${encodeURIComponent(payload.title)}&artist=${encodeURIComponent(payload.artist)}&previewLink=${encodeURIComponent(payload.previewLink || "")}`;
+}
+
+function isBestEverDuplicateError(error) {
+  const msg = String(error || "").toLowerCase();
+  return msg.includes("already been submitted by another participant");
+}
+
+function handleBestEverSubmitFailure(error) {
+  const message = String(error || "").trim();
+
+  if (isBestEverDuplicateError(message)) {
+    clearBestEverSelection();
+    unlockBestEverInputs();
+
+    const search = document.getElementById("bestEverSearch");
+    const results = document.getElementById("bestEverResults");
+    if (search) {
+      search.disabled = false;
+      search.focus();
+    }
+    if (results) results.innerHTML = "";
+
+    showBestEverMsg("err", BEST_EVER_DUPLICATE_MSG);
+    validateBestEverSubmit();
+    return;
+  }
+
+  showBestEverMsg("err", message || "Submission failed. Please try again.");
+  validateBestEverSubmit();
+}
+
 async function confirmBestEverSubmit() {
   if (!pendingBestEverPayload) return;
 
@@ -415,12 +493,11 @@ async function confirmBestEverSubmit() {
   try {
     setBestEverSubmitSending(true);
 
-    await fetch(API_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payloadToSend)
-    });
+    const data = await jsonp(buildBestEverSubmitUrl(payloadToSend));
+    if (!data?.ok) {
+      handleBestEverSubmitFailure(data?.error);
+      return;
+    }
 
     storeBestEverSubmit(payloadToSend.voter, bestEverSelectedTrack);
     addVoterToBestEverList(payloadToSend.voter);

@@ -8,8 +8,39 @@ const BEST_EVER_SUBMIT_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter"
 // --- Add at the start of doPost, after parsing JSON: ---
 //
 // if (data.action === "bestEver") {
-//   return handleBestEverPost_(ss, data);
+//   return json_(submitBestEver_(ss, data));
 // }
+
+function submitBestEver_(ss, data) {
+  if (!data.eventId || !data.voter || !data.title || !data.artist) {
+    return { ok: false, error: "Invalid Best Ever payload" };
+  }
+
+  const validVoters = getVoters_(ss);
+  if (!validVoters.includes(data.voter)) {
+    return { ok: false, error: "Unknown voter" };
+  }
+
+  const title = String(data.title).trim();
+  const artist = String(data.artist).trim();
+  const previewLink = String(data.previewLink || "").trim();
+
+  if (hasBestEverVoterSubmitted_(ss, data.eventId, data.voter)) {
+    return { ok: false, error: "This voter has already submitted a Best Ever Song." };
+  }
+
+  if (hasBestEverSongDuplicate_(ss, title, artist)) {
+    return { ok: false, error: "This song has already been submitted by another participant." };
+  }
+
+  const submitsSheet = ss.getSheetByName(SHEET_BEST_EVER_SUBMITS);
+  const nextNr = getNextBestEverNumber_(submitsSheet);
+  const songRow = [nextNr, title, artist, previewLink, data.voter];
+
+  submitsSheet.appendRow(songRow.concat([new Date(), data.eventId]));
+
+  return { ok: true, nr: nextNr };
+}
 
 function handleBestEverPost_(ss, data) {
   const lock = LockService.getScriptLock();
@@ -17,35 +48,7 @@ function handleBestEverPost_(ss, data) {
 
   try {
     setupSheets_(ss);
-
-    if (!data.eventId || !data.voter || !data.title || !data.artist) {
-      return json_({ ok: false, error: "Invalid Best Ever payload" });
-    }
-
-    const validVoters = getVoters_(ss);
-    if (!validVoters.includes(data.voter)) {
-      return json_({ ok: false, error: "Unknown voter" });
-    }
-
-    const title = String(data.title).trim();
-    const artist = String(data.artist).trim();
-    const previewLink = String(data.previewLink || "").trim();
-
-    if (hasBestEverVoterSubmitted_(ss, data.eventId, data.voter)) {
-      return json_({ ok: false, error: "This voter has already submitted a Best Ever Song." });
-    }
-
-    if (hasBestEverSongDuplicate_(ss, title, artist)) {
-      return json_({ ok: false, error: "This song has already been submitted by another participant." });
-    }
-
-    const submitsSheet = ss.getSheetByName(SHEET_BEST_EVER_SUBMITS);
-    const nextNr = getNextBestEverNumber_(submitsSheet);
-    const songRow = [nextNr, title, artist, previewLink, data.voter];
-
-    submitsSheet.appendRow(songRow.concat([new Date(), data.eventId]));
-
-    return json_({ ok: true, nr: nextNr });
+    return json_(submitBestEver_(ss, data));
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -191,6 +194,26 @@ function searchItunesTracks_(query) {
 //
 // if (action === "itunesSearch") {
 //   return json_(searchItunesTracks_(e.parameter.q || ""), e.parameter.callback);
+// }
+//
+// if (action === "bestEverSubmit") {
+//   const lock = LockService.getScriptLock();
+//   lock.waitLock(10000);
+//
+//   try {
+//     const data = {
+//       eventId: eventId,
+//       voter: String(e.parameter.voter || "").trim(),
+//       title: String(e.parameter.title || "").trim(),
+//       artist: String(e.parameter.artist || "").trim(),
+//       previewLink: String(e.parameter.previewLink || "").trim()
+//     };
+//     return json_(submitBestEver_(ss, data), e.parameter.callback);
+//   } catch (err) {
+//     return json_({ ok: false, error: String(err) }, e.parameter.callback);
+//   } finally {
+//     lock.releaseLock();
+//   }
 // }
 //
 // return json_({
