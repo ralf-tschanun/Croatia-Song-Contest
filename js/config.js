@@ -1,5 +1,5 @@
 // A'Croatia 2026 configuration
-const API_URL = "https://script.google.com/macros/s/AKfycby0HFb7D7Z2q1jOAR1KWrf-mW21bIHbQ9qkpw001ipxrpeHxSyAWcq_gwGvxiaxctjR/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbztW0CA05fRAwg9U8ijYCWukgHlJUQY4rxLIZ2wFiT5Ox_v-K_lOn43GVm5ujWYeQav/exec";
 const EVENT_ID = "acroatia-2026";
 
 let SONGS = [];

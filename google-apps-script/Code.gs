@@ -7,14 +7,21 @@
 // 4. Run authorizeExternalRequests once (dropdown) and approve permissions
 // 5. Deploy -> Manage deployments -> Edit -> New version -> Deploy
 //
-// The Web App URL stays the same — no change needed in js/config.js
+// Version marker — after deploy, verify with:
+// ?action=apiInfo
+const API_VERSION = "2026-07-14-country-shape";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
 const SHEET_VOTERS = "Teilnehmer";
 const SHEET_BEST_EVER_SUBMITS = "BestEverSubmits";
+const SHEET_COUNTRY_SHAPE_SUBMITS = "CountryShapeSubmits";
 const SONG_ROW_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter"];
 const BEST_EVER_SUBMIT_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter", "Timestamp", "Event ID"];
+const COUNTRY_SHAPE_SUBMIT_HEADERS = ["Timestamp", "Event ID", "Voter", "Correct Countries"];
+const COUNTRY_SHAPE_COUNTRY_COUNT = 20;
+const COUNTRY_SHAPE_STORAGE_PREFIX = "countries:";
+const COUNTRY_SHAPE_LEGACY_PREFIX = "countries=";
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -28,6 +35,10 @@ function doPost(e) {
 
     if (data.action === "bestEver") {
       return json_(submitBestEver_(ss, data));
+    }
+
+    if (data.action === "countryShape") {
+      return json_(submitCountryShape_(ss, data));
     }
 
     const votesSheet = ss.getSheetByName(SHEET_VOTES);
@@ -87,6 +98,22 @@ function doGet(e) {
   const action = e.parameter.action || "results";
   const eventId = e.parameter.eventId || "acroatia-2026";
 
+  if (action === "apiInfo") {
+    return json_({
+      ok: true,
+      action: "apiInfo",
+      version: API_VERSION,
+      features: [
+        "config",
+        "results",
+        "bestEverSubmit",
+        "bestEverCheck",
+        "countryShapeSubmit",
+        "countryShapeResults"
+      ]
+    }, e.parameter.callback);
+  }
+
   if (action === "config") {
     return json_({
       ok: true,
@@ -128,6 +155,28 @@ function doGet(e) {
       action: "bestEverCheck",
       duplicate: hasBestEverSongDuplicate_(ss, title, artist)
     }, e.parameter.callback);
+  }
+
+  if (action === "countryShapeResults") {
+    return json_(getCountryShapeResults_(ss, eventId), e.parameter.callback);
+  }
+
+  if (action === "countryShapeSubmit") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const data = {
+        eventId: eventId,
+        voter: String(e.parameter.voter || "").trim(),
+        correctCountries: parseCountryShapeCountries_(e.parameter.correctCountries || "")
+      };
+      return json_(submitCountryShape_(ss, data), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   const votesSheet = ss.getSheetByName(SHEET_VOTES);
@@ -182,6 +231,182 @@ function setupSheets_(ss) {
   }
 
   setupBestEverSheets_(ss);
+  setupCountryShapeSheets_(ss);
+}
+
+function setupCountryShapeSheets_(ss) {
+  let submits = ss.getSheetByName(SHEET_COUNTRY_SHAPE_SUBMITS);
+  if (!submits) {
+    submits = ss.insertSheet(SHEET_COUNTRY_SHAPE_SUBMITS);
+    submits.appendRow(COUNTRY_SHAPE_SUBMIT_HEADERS);
+    submits.getRange(1, 1, 1, COUNTRY_SHAPE_SUBMIT_HEADERS.length).setFontWeight("bold");
+  }
+
+  // Keep country lists as plain text so values like "1,2,3" are never auto-converted to dates.
+  const lastRow = Math.max(submits.getLastRow(), 1);
+  submits.getRange(1, 4, lastRow, 1).setNumberFormat("@");
+}
+
+function formatCountryShapeCountriesForSheet_(countries) {
+  return COUNTRY_SHAPE_STORAGE_PREFIX + countries.join("|");
+}
+
+function normalizeCountryShapeVoterKey_(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function extractCountryShapeCountryList_(text) {
+  const normalized = String(text || "").trim();
+  const lower = normalized.toLowerCase();
+
+  if (lower.indexOf(COUNTRY_SHAPE_STORAGE_PREFIX) === 0) {
+    return normalized.slice(COUNTRY_SHAPE_STORAGE_PREFIX.length);
+  }
+
+  if (lower.indexOf(COUNTRY_SHAPE_LEGACY_PREFIX) === 0) {
+    return normalized.slice(COUNTRY_SHAPE_LEGACY_PREFIX.length);
+  }
+
+  return normalized;
+}
+
+function parseCountryShapeCountries_(raw) {
+  if (Array.isArray(raw)) {
+    return raw
+      .map(value => Number(value))
+      .filter(value => Number.isInteger(value) && value >= 1 && value <= COUNTRY_SHAPE_COUNTRY_COUNT);
+  }
+
+  if (raw instanceof Date) {
+    return [];
+  }
+
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return [raw];
+  }
+
+  const text = String(raw || "").trim();
+  if (!text) return [];
+
+  const countryList = extractCountryShapeCountryList_(text);
+  if (countryList && (text.toLowerCase().indexOf("countries:") === 0 || text.toLowerCase().indexOf("countries=") === 0)) {
+    if (!countryList) return [];
+    return countryList
+      .split("|")
+      .map(value => Number(String(value).trim()))
+      .filter(value => Number.isInteger(value) && value >= 1 && value <= COUNTRY_SHAPE_COUNTRY_COUNT);
+  }
+
+  if (text.charAt(0) === "[") {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map(value => Number(value))
+          .filter(value => Number.isInteger(value) && value >= 1 && value <= COUNTRY_SHAPE_COUNTRY_COUNT);
+      }
+    } catch (err) {
+      // Fall through to legacy parsing.
+    }
+  }
+
+  return text
+    .split(/[,;|]/)
+    .map(value => Number(String(value).trim()))
+    .filter(value => Number.isInteger(value) && value >= 1 && value <= COUNTRY_SHAPE_COUNTRY_COUNT);
+}
+
+function appendCountryShapeRow_(sheet, eventId, voter, countries) {
+  const nextRow = Math.max(sheet.getLastRow(), 1) + 1;
+  const storageValue = formatCountryShapeCountriesForSheet_(countries);
+
+  sheet.getRange(nextRow, 1, 1, 3).setValues([[new Date(), eventId, voter]]);
+
+  const countriesCell = sheet.getRange(nextRow, 4);
+  countriesCell.setNumberFormat("@");
+  countriesCell.setValue(storageValue);
+  SpreadsheetApp.flush();
+}
+
+function hasCountryShapeVoterSubmitted_(ss, eventId, voter) {
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_SUBMITS);
+  if (!sheet) return false;
+
+  const rows = sheet.getDataRange().getValues().slice(1);
+  const voterKey = normalizeCountryShapeVoterKey_(voter);
+
+  return rows.some(row =>
+    String(row[1] || "").trim() === String(eventId).trim() &&
+    normalizeCountryShapeVoterKey_(row[2]) === voterKey
+  );
+}
+
+function getCountryShapeSubmissions_(ss, eventId) {
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_SUBMITS);
+  if (!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  const numRows = lastRow - 1;
+  const rows = sheet.getRange(2, 1, numRows, 4).getValues();
+  const displayRows = sheet.getRange(2, 1, numRows, 4).getDisplayValues();
+
+  return rows
+    .map((row, index) => {
+      if (String(row[1] || "").trim() !== String(eventId).trim()) return null;
+
+      let rawCountries = row[3];
+      if (rawCountries instanceof Date) {
+        rawCountries = displayRows[index][3];
+      }
+
+      return {
+        voter: String(row[2] || "").trim(),
+        correctCountries: parseCountryShapeCountries_(rawCountries)
+      };
+    })
+    .filter(entry => entry && entry.voter);
+}
+
+function submitCountryShape_(ss, data) {
+  setupCountryShapeSheets_(ss);
+
+  if (!data.eventId || !data.voter || !Array.isArray(data.correctCountries)) {
+    return { ok: false, error: "Invalid Country by Shape payload" };
+  }
+
+  const validVoters = getVoters_(ss);
+  if (!validVoters.includes(data.voter)) {
+    return { ok: false, error: "Unknown voter" };
+  }
+
+  const correctCountries = parseCountryShapeCountries_(data.correctCountries);
+  const uniqueCountries = [...new Set(correctCountries)].sort((a, b) => a - b);
+
+  if (hasCountryShapeVoterSubmitted_(ss, data.eventId, data.voter)) {
+    return { ok: false, error: "This voter has already submitted a Country by Shape result." };
+  }
+
+  const submitsSheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_SUBMITS);
+  appendCountryShapeRow_(submitsSheet, data.eventId, data.voter, uniqueCountries);
+
+  return { ok: true, action: "countryShape", correctCount: uniqueCountries.length };
+}
+
+function getCountryShapeResults_(ss, eventId) {
+  const submissions = getCountryShapeSubmissions_(ss, eventId);
+  const submittedVoters = submissions
+    .map(entry => entry.voter)
+    .sort((a, b) => a.localeCompare(b, "de"));
+
+  return {
+    ok: true,
+    action: "countryShapeResults",
+    submitCount: submittedVoters.length,
+    submittedVoters: submittedVoters,
+    submissions: submissions
+  };
 }
 
 function setupBestEverSheets_(ss) {
