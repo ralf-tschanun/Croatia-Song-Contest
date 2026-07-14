@@ -140,7 +140,7 @@ function renderBestEverSelected(track, locked) {
   if (!selected || !track) return;
 
   const preview = track.preview ? `
-    <a class="best-ever-preview" href="${escapeHtml(track.preview)}" target="_blank" rel="noopener noreferrer" title="Preview on Deezer">🎧 Preview</a>
+    <a class="best-ever-preview" href="${escapeHtml(track.preview)}" target="_blank" rel="noopener noreferrer" title="Preview on iTunes">🎧 Preview</a>
   ` : "";
 
   selected.innerHTML = `
@@ -199,8 +199,8 @@ function isExternalRequestPermissionError(error) {
     msg.includes("authorization");
 }
 
-function buildBestEverSearchUrl(action, query) {
-  return `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=${action}&q=${encodeURIComponent(query)}`;
+function buildBestEverSearchUrl(query) {
+  return `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=itunesSearch&q=${encodeURIComponent(query)}`;
 }
 
 function formatBestEverSearchError(error) {
@@ -216,10 +216,10 @@ function formatBestEverSearchError(error) {
   return raw || "Song search failed. Please try again.";
 }
 
-async function searchBestEverTracksViaApi(action, query) {
-  const data = await jsonp(buildBestEverSearchUrl(action, query));
+async function searchBestEverTracksViaApi(query) {
+  const data = await jsonp(buildBestEverSearchUrl(query));
   if (data?.ok && Array.isArray(data.tracks)) return data.tracks;
-  throw new Error(data?.error || `${action} failed`);
+  throw new Error(data?.error || "itunesSearch failed");
 }
 
 async function searchBestEverTracksItunesClient(query) {
@@ -243,29 +243,18 @@ async function searchBestEverTracks(query) {
   let lastError = null;
 
   try {
-    return await searchBestEverTracksViaApi("deezerSearch", query);
-  } catch (e) {
-    lastError = e;
-    console.warn("Deezer search failed", e);
-  }
-
-  try {
-    return await searchBestEverTracksViaApi("itunesSearch", query);
+    const tracks = await searchBestEverTracksViaApi(query);
+    if (tracks.length) return tracks;
   } catch (e) {
     lastError = e;
     console.warn("iTunes proxy search failed", e);
   }
 
-  if (isExternalRequestPermissionError(lastError)) {
-    try {
-      return await searchBestEverTracksItunesClient(query);
-    } catch (e) {
-      lastError = e;
-      console.warn("Client iTunes search failed", e);
-    }
+  try {
+    return await searchBestEverTracksItunesClient(query);
+  } catch (e) {
+    throw new Error(formatBestEverSearchError(e.message || lastError?.message));
   }
-
-  throw new Error(formatBestEverSearchError(lastError));
 }
 
 function handleBestEverSearchInput() {
@@ -443,7 +432,6 @@ async function submitBestEver() {
     title: track.title,
     artist: track.artist,
     previewLink: track.preview || track.link || "",
-    deezerLink: track.link || "",
     songTitle: formatBestEverSongTitle(track.title, track.artist),
     submittedAt: new Date().toISOString()
   };
@@ -453,6 +441,16 @@ async function submitBestEver() {
 
 function buildBestEverSubmitUrl(payload) {
   return `${API_URL}?eventId=${encodeURIComponent(payload.eventId)}&action=bestEverSubmit&voter=${encodeURIComponent(payload.voter)}&title=${encodeURIComponent(payload.title)}&artist=${encodeURIComponent(payload.artist)}&previewLink=${encodeURIComponent(payload.previewLink || "")}`;
+}
+
+function buildBestEverCheckUrl(title, artist) {
+  return `${API_URL}?eventId=${encodeURIComponent(EVENT_ID)}&action=bestEverCheck&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`;
+}
+
+function isBestEverSubmitSuccess(data) {
+  return data?.ok === true &&
+    data?.action === "bestEver" &&
+    typeof data.nr === "number";
 }
 
 function isBestEverDuplicateError(error) {
@@ -493,9 +491,24 @@ async function confirmBestEverSubmit() {
   try {
     setBestEverSubmitSending(true);
 
+    const check = await jsonp(buildBestEverCheckUrl(payloadToSend.title, payloadToSend.artist));
+    if (check?.action === "bestEverCheck" && check.duplicate) {
+      handleBestEverSubmitFailure("This song has already been submitted by another participant.");
+      return;
+    }
+
     const data = await jsonp(buildBestEverSubmitUrl(payloadToSend));
-    if (!data?.ok) {
-      handleBestEverSubmitFailure(data?.error);
+    if (!isBestEverSubmitSuccess(data)) {
+      handleBestEverSubmitFailure(
+        data?.error ||
+        (data?.ok ? "Submission could not be confirmed. Please try again." : "Submission failed. Please try again.")
+      );
+      return;
+    }
+
+    await loadBestEverVoters();
+    if (!hasBestEverSubmitted(payloadToSend.voter)) {
+      handleBestEverSubmitFailure("Submission could not be confirmed. Please try again.");
       return;
     }
 

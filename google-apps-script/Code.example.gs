@@ -89,10 +89,6 @@ function doGet(e) {
     }, e.parameter.callback);
   }
 
-  if (action === "deezerSearch") {
-    return json_(searchDeezerTracks_(e.parameter.q || ""), e.parameter.callback);
-  }
-
   if (action === "itunesSearch") {
     return json_(searchItunesTracks_(e.parameter.q || ""), e.parameter.callback);
   }
@@ -115,6 +111,16 @@ function doGet(e) {
     } finally {
       lock.releaseLock();
     }
+  }
+
+  if (action === "bestEverCheck") {
+    const title = String(e.parameter.title || "").trim();
+    const artist = String(e.parameter.artist || "").trim();
+    return json_({
+      ok: true,
+      action: "bestEverCheck",
+      duplicate: hasBestEverSongDuplicate_(ss, title, artist)
+    }, e.parameter.callback);
   }
 
   const votesSheet = ss.getSheetByName(SHEET_VOTES);
@@ -208,7 +214,7 @@ function submitBestEver_(ss, data) {
 
   submitsSheet.appendRow(songRow.concat([new Date(), data.eventId]));
 
-  return { ok: true, nr: nextNr };
+  return { ok: true, action: "bestEver", nr: nextNr };
 }
 
 function handleBestEverPost_(ss, data) {
@@ -337,36 +343,6 @@ function getSongs_(ss) {
   }).filter(Boolean);
 }
 
-function searchDeezerTracks_(query) {
-  const q = String(query || "").trim();
-  if (q.length < 2) return { ok: true, tracks: [] };
-
-  try {
-    const url = "https://api.deezer.com/search?q=" + encodeURIComponent(q) + "&limit=10";
-    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    const status = response.getResponseCode();
-
-    if (status < 200 || status >= 300) {
-      return { ok: false, error: "Deezer search failed (" + status + ")" };
-    }
-
-    const data = JSON.parse(response.getContentText());
-    const tracks = (data.data || [])
-      .map(track => ({
-        id: track.id,
-        title: String(track.title || "").trim(),
-        artist: String((track.artist && track.artist.name) || "").trim(),
-        preview: String(track.preview || "").trim(),
-        link: String(track.link || "").trim()
-      }))
-      .filter(track => track.title && track.artist);
-
-    return { ok: true, tracks: tracks };
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-}
-
 function searchItunesTracks_(query) {
   const q = String(query || "").trim();
   if (q.length < 2) return { ok: true, tracks: [] };
@@ -413,14 +389,14 @@ function json_(obj, callback) {
     .setMimeType(callback ? ContentService.MimeType.JAVASCRIPT : ContentService.MimeType.JSON);
 }
 
-// Run once in the Apps Script editor to grant Deezer search permission:
+// Run once in the Apps Script editor to grant iTunes search permission:
 // 1. Select authorizeExternalRequests in the function dropdown (no trailing _)
 // 2. Click Run and approve the permission dialog
 // 3. Deploy -> Manage deployments -> New version
 //
 // Note: Functions ending with _ are hidden from the editor Run menu by Google Apps Script.
 function authorizeExternalRequests() {
-  const response = UrlFetchApp.fetch("https://api.deezer.com/search?q=test&limit=1", {
+  const response = UrlFetchApp.fetch("https://itunes.apple.com/search?term=test&media=music&entity=song&limit=1", {
     muteHttpExceptions: true
   });
   Logger.log(response.getResponseCode());
