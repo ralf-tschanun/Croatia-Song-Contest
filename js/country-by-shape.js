@@ -20,18 +20,17 @@ const ADMIN_END_TIMER_SENDING_LABEL = "⏳ ending...";
 const ADMIN_SUBMIT_CORRECT_LABEL = "Submit";
 const ADMIN_SUBMIT_CORRECT_SENDING_LABEL = "⏳ saving...";
 
-const COUNTRY_GUESS_WINDOW_SECONDS = 30;
+const COUNTRY_GUESS_WINDOW_SECONDS = 20;
 let guessCountdownIntervalId = null;
 let guessStatePollIntervalId = null;
 let guessSubmitInFlight = false;
 let adminSubmittingCountry = null;
+let adminTimerStarting = false;
 let pendingGuessChoices = {};
-let localTimerSecondsRemaining = 0;
-let localTimerRoundToken = 0;
-let localGuessingOpen = false;
-let finalSubmitTriggeredForToken = null;
-let timerExpiredHandledKey = null;
-const adminEndTimerSentKeyPrefix = `${COUNTRY_SHAPE_EVENT_ID}:adminEndSent`;
+let countdownSeconds = 0;
+let countdownRunning = false;
+let localRoundToken = 0;
+let guessAutoSubmittedForToken = 0;
 
 let COUNTRY_GUESS_STATE = {
   activeCountry: 1,
@@ -112,7 +111,11 @@ function openInputView() {
   startGuessStatePolling();
 }
 
-const COUNTRY_API_NOT_DEPLOYED_MSG = "Country by Shape is not active on the API yet. Open YOUR_WEB_APP_URL?action=apiInfo — you should see version \"2026-07-14-country-shape-getrange-fix\". If not: replace ALL of Code.gs with google-apps-script/Code.gs, then Deploy → Manage deployments → Edit → New version → Deploy.";
+const COUNTRY_API_NOT_DEPLOYED_MSG = "Country by Shape is not active on the API yet. Open YOUR_WEB_APP_URL?action=apiInfo — you should see version \"2026-07-15-remove-country-shape-submits\". If not: replace ALL of Code.gs with google-apps-script/Code.gs, then Deploy → Manage deployments → Edit → New version → Deploy.";
+
+function isCountryShapeVotersSuccess(data) {
+  return data?.ok === true && data?.action === "voters" && Array.isArray(data?.voters);
+}
 
 function isCountryShapeApiActive(data) {
   return data?.ok === true && data?.action === "apiInfo" &&
@@ -143,11 +146,23 @@ function isCountryShapeResultsSuccess(data) {
   return data?.ok === true && data?.action === "countryShapeResults";
 }
 
-function jsonp(url) {
+function jsonp(url, timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
     const callbackName = "countryShapeJsonp_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      delete window[callbackName];
+      script.remove();
+      reject(new Error("JSONP request timed out"));
+    }, timeoutMs);
 
     window[callbackName] = function(data) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve(data);
       delete window[callbackName];
       script.remove();
@@ -156,6 +171,9 @@ function jsonp(url) {
     const script = document.createElement("script");
     script.src = `${url}${url.includes("?") ? "&" : "?"}callback=${callbackName}`;
     script.onerror = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       reject(new Error("JSONP request failed"));
       delete window[callbackName];
       script.remove();
@@ -208,15 +226,19 @@ async function loadPlayers() {
   if (!COUNTRY_SHAPE_API_URL) {
     showInputMessage("err", "API_URL is not configured yet.");
     showGuessMessage("err", "API_URL is not configured yet.");
-    return;
+    return false;
   }
 
   try {
-    const data = await jsonp(`${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=config`);
-    if (!data || data.ok !== true) {
-      showInputMessage("err", data?.error || "Could not load players from Google Sheets.");
-      showGuessMessage("err", data?.error || "Could not load players from Google Sheets.");
-      return;
+    let data = await jsonp(`${COUNTRY_SHAPE_API_URL}?action=voters`);
+
+    if (!isCountryShapeVotersSuccess(data)) {
+      data = await jsonp(`${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=config`);
+      if (!data || data.ok !== true) {
+        showInputMessage("err", data?.error || "Could not load players from Google Sheets.");
+        showGuessMessage("err", data?.error || "Could not load players from Google Sheets.");
+        return false;
+      }
     }
 
     COUNTRY_SHAPE_PLAYERS = data.voters || [];
@@ -224,12 +246,42 @@ async function loadPlayers() {
     if (COUNTRY_SHAPE_PLAYERS.length === 0) {
       showInputMessage("err", "No players found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
       showGuessMessage("err", "No players found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
+      return false;
     }
+
+    return true;
   } catch (e) {
-    showInputMessage("err", "Could not load players from Google Sheets.");
-    showGuessMessage("err", "Could not load players from Google Sheets.");
+    const timedOut = String(e?.message || "").includes("timed out");
+    const message = timedOut
+      ? "Google Sheets API timed out. Please redeploy the latest Code.gs (version 2026-07-14-country-shape-fast-reads-v2) and reload."
+      : "Could not load players from Google Sheets.";
+    showInputMessage("err", message);
+    showGuessMessage("err", message);
     console.error(e);
+    return false;
   }
+}
+
+function clearLegacyLocalGameStorage() {
+  localStorage.removeItem(storageKeyCountryGuessVoter);
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith(storageKeyLocalGuessesPrefix)) {
+      localStorage.removeItem(key);
+    }
+  });
+}
+
+function clearGameSession() {
+  sessionStorage.removeItem(storageKeyCountryGuessVoter);
+  Object.keys(sessionStorage).forEach(key => {
+    if (key.startsWith(storageKeyLocalGuessesPrefix)) {
+      sessionStorage.removeItem(key);
+    }
+  });
+  pendingGuessChoices = {};
+  guessAutoSubmittedForToken = 0;
+  resetCountdownForNewCountry();
+  COUNTRY_GUESS_STATE.userGuesses = {};
 }
 
 function fillGuessPlayerSelect() {
@@ -245,7 +297,12 @@ function fillGuessPlayerSelect() {
 
   if (storedVoter && COUNTRY_SHAPE_PLAYERS.includes(storedVoter)) {
     sel.value = storedVoter;
-    lockGuessPlayerSelect();
+    const hasServerGuess = Object.keys(COUNTRY_GUESS_STATE.userGuesses || {}).length > 0;
+    if (hasServerGuess) {
+      lockGuessPlayerSelect();
+    } else {
+      sel.disabled = false;
+    }
   } else {
     sel.disabled = false;
     sel.selectedIndex = 0;
@@ -253,11 +310,11 @@ function fillGuessPlayerSelect() {
 }
 
 function getStoredGuessVoter() {
-  return String(localStorage.getItem(storageKeyCountryGuessVoter) || "").trim();
+  return String(sessionStorage.getItem(storageKeyCountryGuessVoter) || "").trim();
 }
 
 function storeGuessVoter(voter) {
-  localStorage.setItem(storageKeyCountryGuessVoter, String(voter || "").trim());
+  sessionStorage.setItem(storageKeyCountryGuessVoter, String(voter || "").trim());
 }
 
 function lockGuessPlayerSelect() {
@@ -287,41 +344,9 @@ function hideGuessControlMessage() {
   hideInputMessage();
 }
 
-function getLocalGuessesStorageKey() {
-  const voter = getStoredGuessVoter() || document.getElementById("guessPlayerName")?.value.trim() || "";
-  if (!voter) return "";
-  return `${storageKeyLocalGuessesPrefix}:${normalizePlayerName(voter)}`;
-}
-
-function loadLocalFinalGuesses() {
-  const key = getLocalGuessesStorageKey();
-  if (!key) return {};
-
-  try {
-    return JSON.parse(localStorage.getItem(key) || "{}") || {};
-  } catch (e) {
-    return {};
-  }
-}
-
-function saveLocalFinalGuess(countryNumber, choice) {
-  const key = getLocalGuessesStorageKey();
-  if (!key || !Number.isInteger(choice)) return;
-
-  const data = loadLocalFinalGuesses();
-  data[String(countryNumber)] = choice;
-  localStorage.setItem(key, JSON.stringify(data));
-}
-
-function getLocalFinalGuess(countryNumber) {
-  const choice = loadLocalFinalGuesses()[String(countryNumber)];
-  return Number.isInteger(choice) ? choice : null;
-}
-
 function getUserGuessForCountry(countryNumber) {
   const serverChoice = COUNTRY_GUESS_STATE.userGuesses[String(countryNumber)];
-  if (Number.isInteger(serverChoice)) return serverChoice;
-  return getLocalFinalGuess(countryNumber);
+  return Number.isInteger(serverChoice) ? serverChoice : null;
 }
 
 function formatGuessCountdown(seconds) {
@@ -329,107 +354,87 @@ function formatGuessCountdown(seconds) {
   return `0:${String(safeSeconds).padStart(2, "0")}`;
 }
 
+function isTimerRunning() {
+  return countdownRunning && countdownSeconds > 0;
+}
+
+function isRoundFinishedLocally() {
+  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
+  return token > 0 && localRoundToken === token && !isTimerRunning();
+}
+
 function isLocalGuessWindowOpen() {
-  return localGuessingOpen && localTimerSecondsRemaining > 0;
+  return isTimerRunning();
 }
 
 function stopLocalCountdown() {
+  countdownRunning = false;
   if (guessCountdownIntervalId) {
     clearInterval(guessCountdownIntervalId);
     guessCountdownIntervalId = null;
   }
 }
 
-function getTimerRoundKey(countryNumber, roundToken) {
-  return `${countryNumber}:${roundToken}`;
-}
-
-function resetLocalTimerForNewActiveCountry() {
-  localTimerRoundToken = 0;
-  localGuessingOpen = false;
-  localTimerSecondsRemaining = 0;
-  timerExpiredHandledKey = null;
-  finalSubmitTriggeredForToken = null;
+function resetCountdownForNewCountry() {
   stopLocalCountdown();
-}
-function isActiveCountryRoundClosed() {
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
-  if (COUNTRY_GUESS_STATE.correctAnswers[String(activeCountry)]) return true;
-
-  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
-  if (token <= 0) return false;
-
-  const roundKey = getTimerRoundKey(activeCountry, token);
-  return timerExpiredHandledKey === roundKey ||
-    (!COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen && localTimerSecondsRemaining <= 0 && localTimerRoundToken === token);
+  countdownSeconds = 0;
+  localRoundToken = 0;
+  guessAutoSubmittedForToken = 0;
 }
 
-function syncLocalTimerFromServer() {
-  const roundToken = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
-  const guessingOpen = !!COUNTRY_GUESS_STATE.guessingOpen;
+function startLocalCountdownForRound(roundToken) {
+  const token = Number(roundToken) || 0;
+  if (token <= 0) return;
 
-  if (guessingOpen && roundToken > 0 && roundToken !== localTimerRoundToken) {
-    localTimerRoundToken = roundToken;
-    localGuessingOpen = true;
-    localTimerSecondsRemaining = COUNTRY_GUESS_WINDOW_SECONDS;
-    finalSubmitTriggeredForToken = null;
-    timerExpiredHandledKey = null;
-    startLocalCountdown();
-    renderGuessCountryList();
-    renderAdminCountryList();
-    return;
-  }
-
-  if (!guessingOpen && localGuessingOpen) {
-    onLocalTimerExpired(localTimerRoundToken);
-  }
-}
-
-function startLocalCountdown() {
   stopLocalCountdown();
-  updateGuessCountdownDisplay(localTimerSecondsRemaining);
+  localRoundToken = token;
+  countdownSeconds = COUNTRY_GUESS_WINDOW_SECONDS;
+  countdownRunning = true;
+  updateGuessCountdownDisplay(countdownSeconds);
 
   guessCountdownIntervalId = setInterval(() => {
-    localTimerSecondsRemaining = Math.max(0, localTimerSecondsRemaining - 1);
-    updateGuessCountdownDisplay(localTimerSecondsRemaining);
+    countdownSeconds = Math.max(0, countdownSeconds - 1);
+    updateGuessCountdownDisplay(countdownSeconds);
 
-    if (localTimerSecondsRemaining <= 0) {
-      onLocalTimerExpired(localTimerRoundToken);
+    if (countdownSeconds <= 0) {
+      onCountdownFinished();
     }
   }, 1000);
 }
 
-async function onLocalTimerExpired(roundToken) {
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
-  const roundKey = getTimerRoundKey(activeCountry, roundToken);
-  if (!roundToken || timerExpiredHandledKey === roundKey) return;
-  timerExpiredHandledKey = roundKey;
-
-  localGuessingOpen = false;
-  localTimerSecondsRemaining = 0;
+async function onCountdownFinished() {
   stopLocalCountdown();
+  countdownSeconds = 0;
   updateGuessCountdownDisplay(0);
 
-  disableActiveGuessOptions();
+  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
+  if (guessAutoSubmittedForToken < token) {
+    const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+    const choice = getPendingGuessChoice(activeCountry) ?? getSelectedGuessChoice(activeCountry);
+    const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
 
-  await autoSubmitCountryGuess(getSelectedGuessChoice(activeCountry));
-
-  if (hasInputAccess()) {
-    const adminEndKey = `${adminEndTimerSentKeyPrefix}:${roundKey}`;
-    if (sessionStorage.getItem(adminEndKey) !== "true") {
-      sessionStorage.setItem(adminEndKey, "true");
-      await adminEndTimer(activeCountry, { auto: true });
+    if (playerName && choice && !COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)]) {
+      guessAutoSubmittedForToken = token;
+      await autoSubmitCountryGuess(choice);
     }
-  } else {
-    renderGuessCountryList();
-    renderAdminCountryList();
-    updateGuessActiveInfo(0);
-    updateAdminStatus(0);
   }
+
+  renderGuessCountryList();
+  renderAdminCountryList();
+  updateGuessActiveInfo(0);
+  updateAdminStatus(0);
 }
 
-async function triggerFinalSubmitForRound(roundToken) {
-  await onLocalTimerExpired(roundToken);
+function maybeStartCountdownFromServer() {
+  if (isTimerRunning()) return;
+
+  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
+  if (!COUNTRY_GUESS_STATE.guessingOpen || token <= 0) return;
+  if (localRoundToken === token) return;
+
+  startLocalCountdownForRound(token);
+  renderGuessCountryList();
+  renderAdminCountryList();
 }
 
 function getCountryGuessStateSignature() {
@@ -489,6 +494,7 @@ async function pollLiveGuessState() {
     if (isGuessViewVisible()) {
       updateGuessActiveInfo();
       updateGuessSubmitButtonState();
+      maybeStartCountdownFromServer();
     }
     if (isInputViewVisible()) {
       updateAdminStatus();
@@ -501,12 +507,13 @@ async function pollLiveGuessState() {
   const parsedNext = JSON.parse(nextState);
   if (previousState.activeCountry !== parsedNext.activeCountry) {
     trimPendingGuessChoices(parsedNext.activeCountry);
-    resetLocalTimerForNewActiveCountry();
+    resetCountdownForNewCountry();
   }
 
   if (isGuessViewVisible()) {
     updateGuessActiveInfo();
     renderGuessCountryList();
+    maybeStartCountdownFromServer();
   }
 
   if (isInputViewVisible()) {
@@ -514,12 +521,11 @@ async function pollLiveGuessState() {
     renderAdminCountryList();
   }
 
-  syncLocalTimerFromServer();
   restartGuessStatePolling();
 }
 
 function getGuessPollIntervalMs() {
-  return COUNTRY_GUESS_STATE.guessingOpen || localGuessingOpen ? 2000 : 10000;
+  return isTimerRunning() || COUNTRY_GUESS_STATE.guessingOpen ? 3000 : 12000;
 }
 
 function restartGuessStatePolling() {
@@ -564,15 +570,7 @@ function updateGuessCountdownDisplay(seconds) {
   updateAdminStatus(seconds);
 }
 
-function disableActiveGuessOptions() {
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
-  document.querySelectorAll(`input[name="guess-country-${activeCountry}"]`).forEach(input => {
-    input.disabled = true;
-  });
-  updateGuessSubmitButtonState();
-}
-
-function updateAdminStatus(seconds = localTimerSecondsRemaining) {
+function updateAdminStatus(seconds = countdownSeconds) {
   const status = document.getElementById("adminStatus");
   if (!status) return;
 
@@ -581,15 +579,15 @@ function updateAdminStatus(seconds = localTimerSecondsRemaining) {
     return;
   }
 
-  const timerLabel = !COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen
-    ? "ready for start · "
-    : (seconds > 0 ? `${formatGuessCountdown(seconds)} left · ` : "time is up · ");
+  const timerLabel = isTimerRunning()
+    ? `${formatGuessCountdown(seconds)} left · `
+    : (isRoundFinishedLocally() ? "enter correct answer · " : "ready for start · ");
 
   status.textContent =
     `Active country: Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}${COUNTRY_GUESS_STATE.guessCount}/${COUNTRY_GUESS_STATE.totalPlayers} guessed · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} completed`;
 }
 
-function updateGuessActiveInfo(seconds = localTimerSecondsRemaining) {
+function updateGuessActiveInfo(seconds = countdownSeconds) {
   const info = document.getElementById("guessActiveInfo");
   if (!info) return;
 
@@ -598,9 +596,9 @@ function updateGuessActiveInfo(seconds = localTimerSecondsRemaining) {
     return;
   }
 
-  const timerLabel = !COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen
-    ? "waiting for admin start · "
-    : (seconds > 0 ? `${formatGuessCountdown(seconds)} left · ` : "locked · ");
+  const timerLabel = isTimerRunning()
+    ? `${formatGuessCountdown(seconds)} left · `
+    : (isRoundFinishedLocally() ? "locked · " : "waiting for admin start · ");
 
   info.textContent =
     `Open country: Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}${COUNTRY_GUESS_STATE.guessCount}/${COUNTRY_GUESS_STATE.totalPlayers} guessed`;
@@ -634,7 +632,7 @@ async function loadCountryGuessState() {
       gameComplete: !!data.gameComplete
     };
 
-    syncLocalTimerFromServer();
+    maybeStartCountdownFromServer();
   } catch (e) {
     console.warn("Could not load Country by Shape guess state", e);
   }
@@ -658,13 +656,13 @@ function getCountryGuessRowStatus(countryNumber) {
 
   if (userChoice && countryNumber <= activeCountry) return "done";
 
-  if (countryNumber === activeCountry + 1 && isActiveCountryRoundClosed()) {
+  if (countryNumber === activeCountry + 1 && isRoundFinishedLocally()) {
     return "up-next";
   }
 
   if (countryNumber === activeCountry) {
-    if (isLocalGuessWindowOpen()) return "active";
-    if (isActiveCountryRoundClosed()) return userChoice ? "done" : "missed";
+    if (isTimerRunning()) return "active";
+    if (isRoundFinishedLocally()) return userChoice ? "done" : "missed";
     return "waiting";
   }
 
@@ -674,13 +672,13 @@ function getCountryGuessRowStatus(countryNumber) {
 
 function getCountryGuessStatusLabel(status, countryNumber) {
   const userChoice = getUserGuessForCountry(countryNumber);
-  if (status === "done" && userChoice) return `Your guess: option ${userChoice}`;
+  if (status === "done" && userChoice) return "";
   if (status === "done") return "Submitted";
   if (status === "active") return "Change anytime";
   if (status === "waiting") return "Waiting for timer";
   if (status === "up-next") return "Next · waiting for timer";
   if (status === "closed") return "Resolved";
-  if (status === "missed" && userChoice) return `Your guess: option ${userChoice}`;
+  if (status === "missed" && userChoice) return "";
   if (status === "missed") return "No guess";
   return "Locked";
 }
@@ -697,9 +695,9 @@ function renderGuessCountryList() {
     const displayChoice = userChoice || (status === "active" ? pendingChoice : null);
     const isInteractive = status === "active";
     const options = [1, 2, 3, 4];
-    const showCountdown = status === "active" || (countryNumber === COUNTRY_GUESS_STATE.activeCountry && localGuessingOpen);
+    const showCountdown = status === "active";
     const countdownHtml = showCountdown
-      ? `<span class="country-guess-countdown" id="guess-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(localTimerSecondsRemaining)}</span>`
+      ? `<span class="country-guess-countdown" id="guess-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(countdownSeconds)}</span>`
       : "";
 
     return `
@@ -712,8 +710,10 @@ function renderGuessCountryList() {
           </span>
         </div>
         <div class="country-guess-options">
-          ${options.map(choice => `
-            <label class="country-guess-option-label">
+          ${options.map(choice => {
+            const isSavedChoice = userChoice === choice && status !== "active";
+            return `
+            <label class="country-guess-option-label${isSavedChoice ? " country-guess-option-label-saved" : ""}">
               <input
                 type="radio"
                 name="guess-country-${countryNumber}"
@@ -724,9 +724,9 @@ function renderGuessCountryList() {
               />
               <span>${choice}</span>
             </label>
-          `).join("")}
+          `;
+          }).join("")}
         </div>
-        ${userChoice && status !== "active" ? `<p class="country-admin-saved-choice">Your guess: option ${userChoice}</p>` : ""}
       </div>
     `;
   }).join("");
@@ -771,7 +771,6 @@ function buildCountryShapeAdminEndTimerUrl(country) {
 }
 
 async function refreshGuessSession() {
-  stopLocalCountdown();
   await loadCountryGuessState();
   trimPendingGuessChoices(COUNTRY_GUESS_STATE.activeCountry);
   updateAdminStatus();
@@ -781,7 +780,6 @@ async function refreshGuessSession() {
 }
 
 async function refreshAdminSession() {
-  stopLocalCountdown();
   await loadCountryGuessState();
   updateAdminStatus();
   renderAdminCountryList();
@@ -798,7 +796,7 @@ async function autoSubmitCountryGuess(forcedChoice = null) {
     return;
   }
 
-  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] || getLocalFinalGuess(activeCountry)) {
+  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)]) {
     return;
   }
 
@@ -808,7 +806,6 @@ async function autoSubmitCountryGuess(forcedChoice = null) {
     return;
   }
 
-  saveLocalFinalGuess(activeCountry, choice);
   await submitCountryGuess({ auto: true, choice });
 }
 
@@ -824,7 +821,7 @@ async function submitCountryGuess({ auto = false, choice: forcedChoice = null } 
     return false;
   }
 
-  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] || getLocalFinalGuess(activeCountry)) {
+  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)]) {
     if (!auto) showGuessMessage("ok", "You have already submitted your guess for this country.");
     updateGuessSubmitButtonState();
     return false;
@@ -857,26 +854,18 @@ async function submitCountryGuess({ auto = false, choice: forcedChoice = null } 
     setSubmitCountryGuessButtonState(true);
     if (!auto) hideGuessMessage();
 
-    saveLocalFinalGuess(activeCountry, choice);
-    COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] = choice;
-    renderGuessCountryList();
-
     const data = await jsonp(buildCountryShapeGuessSubmitUrl(payload));
     if (!isCountryShapeGuessSubmitSuccess(data)) {
+      delete COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)];
       showGuessMessage("err", data?.error || (auto ? "Auto-submit failed." : "Guess submission failed."));
-      finalSubmitTriggeredForToken = null;
       return false;
     }
 
     clearPendingGuessChoice(activeCountry);
-    saveLocalFinalGuess(activeCountry, choice);
     COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] = choice;
 
     storeGuessVoter(playerName);
     lockGuessPlayerSelect();
-    stopLocalCountdown();
-    localGuessingOpen = false;
-    localTimerSecondsRemaining = 0;
     renderGuessCountryList();
 
     if (auto) {
@@ -901,9 +890,10 @@ function getAdminCountryRowStatus(countryNumber) {
   const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
   if (savedChoice) return "done";
   if (countryNumber === COUNTRY_GUESS_STATE.activeCountry) {
-    return localGuessingOpen || COUNTRY_GUESS_STATE.guessingOpen ? "active" : "waiting";
+    if (isTimerRunning()) return "active";
+    return "waiting";
   }
-  if (countryNumber === COUNTRY_GUESS_STATE.activeCountry + 1 && isActiveCountryRoundClosed()) {
+  if (countryNumber === COUNTRY_GUESS_STATE.activeCountry + 1 && isRoundFinishedLocally()) {
     return "up-next";
   }
   return "locked";
@@ -911,10 +901,12 @@ function getAdminCountryRowStatus(countryNumber) {
 
 function getAdminCountryStatusLabel(status, countryNumber) {
   if (status === "done") {
-    const choice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
-    return `Saved: option ${choice}`;
+    return "";
   }
   if (status === "active") return "Timer running";
+  if (status === "waiting" && isRoundFinishedLocally() && countryNumber === COUNTRY_GUESS_STATE.activeCountry) {
+    return "Enter correct answer";
+  }
   if (status === "waiting") return "Start timer";
   if (status === "up-next") return "Next · waiting for timer";
   return "Locked";
@@ -934,13 +926,13 @@ function renderAdminCountryList() {
     const status = getAdminCountryRowStatus(countryNumber);
     const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
     const isActiveRow = countryNumber === COUNTRY_GUESS_STATE.activeCountry;
-    const isInteractive = isActiveRow && status !== "done";
-    const timerRunning = isActiveRow && (localGuessingOpen || COUNTRY_GUESS_STATE.guessingOpen);
-    const canStartTimer = isActiveRow && !timerRunning && !savedChoice;
-    const canSubmitCorrect = isActiveRow && !timerRunning && !savedChoice;
-    const showCountdown = isActiveRow && localGuessingOpen;
+    const timerRunning = isActiveRow && isTimerRunning();
+    const roundFinished = isActiveRow && isRoundFinishedLocally();
+    const canStartTimer = isActiveRow && !savedChoice && !timerRunning && !roundFinished;
+    const canSubmitCorrect = isActiveRow && !savedChoice && roundFinished;
+    const showCountdown = isActiveRow && isTimerRunning();
     const countdownHtml = showCountdown
-      ? `<span class="country-guess-countdown" id="admin-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(localTimerSecondsRemaining)}</span>`
+      ? `<span class="country-guess-countdown" id="admin-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(countdownSeconds)}</span>`
       : "";
 
     return `
@@ -953,8 +945,10 @@ function renderAdminCountryList() {
           </span>
         </div>
         <div class="country-guess-options">
-          ${[1, 2, 3, 4].map(choice => `
-            <label class="country-guess-option-label">
+          ${[1, 2, 3, 4].map(choice => {
+            const isSavedChoice = savedChoice === choice;
+            return `
+            <label class="country-guess-option-label${isSavedChoice ? " country-guess-option-label-saved" : ""}">
               <input
                 type="radio"
                 name="admin-country-${countryNumber}"
@@ -966,7 +960,8 @@ function renderAdminCountryList() {
               />
               <span>${choice}</span>
             </label>
-          `).join("")}
+          `;
+          }).join("")}
         </div>
         ${isActiveRow && !savedChoice ? `
           <div class="country-admin-actions">
@@ -984,19 +979,22 @@ function renderAdminCountryList() {
               ${canSubmitCorrect ? "" : "disabled"}
             >${ADMIN_SUBMIT_CORRECT_LABEL}</button>
           </div>
-        ` : (savedChoice ? `<p class="country-admin-saved-choice">Correct answer: option ${savedChoice}</p>` : "")}
+        ` : ""}
       </div>
     `;
   }).join("");
 }
 
 async function adminStartTimer(countryNumber) {
+  if (adminTimerStarting) return;
+
   if (!COUNTRY_SHAPE_API_URL) {
     showInputMessage("err", "API_URL is not configured yet.");
     return;
   }
 
   try {
+    adminTimerStarting = true;
     hideInputMessage();
     const btn = document.getElementById(`admin-start-timer-${countryNumber}`);
     if (btn) {
@@ -1011,12 +1009,22 @@ async function adminStartTimer(countryNumber) {
       return;
     }
 
-    await refreshAdminSession();
-    showInputMessage("ok", `Timer started for Country ${countryNumber}. All players have 30 seconds.`);
+    COUNTRY_GUESS_STATE.activeCountry = Number(data.activeCountry) || countryNumber;
+    COUNTRY_GUESS_STATE.guessingOpen = true;
+    COUNTRY_GUESS_STATE.roundToken = Number(data.roundToken) || 0;
+    startLocalCountdownForRound(COUNTRY_GUESS_STATE.roundToken);
+    renderAdminCountryList();
+    renderGuessCountryList();
+    updateAdminStatus();
+    updateGuessActiveInfo();
+    restartGuessStatePolling();
+    showInputMessage("ok", `Timer started for Country ${countryNumber}. ${COUNTRY_GUESS_WINDOW_SECONDS} seconds.`);
   } catch (e) {
     showInputMessage("err", "Could not start timer. Please check your connection.");
     console.error(e);
     renderAdminCountryList();
+  } finally {
+    adminTimerStarting = false;
   }
 }
 
@@ -1037,9 +1045,8 @@ async function adminEndTimer(countryNumber, { auto = false } = {}) {
     }
 
     COUNTRY_GUESS_STATE.guessingOpen = false;
-    localGuessingOpen = false;
-    localTimerSecondsRemaining = 0;
     stopLocalCountdown();
+    countdownSeconds = 0;
     await loadCountryGuessState();
     updateAdminStatus(0);
     updateGuessActiveInfo(0);
@@ -1083,7 +1090,8 @@ async function adminSubmitCorrect(countryNumber) {
     }
 
     adminSubmittingCountry = null;
-    resetLocalTimerForNewActiveCountry();
+    resetCountdownForNewCountry();
+    COUNTRY_GUESS_STATE.guessingOpen = false;
     await loadCountryGuessState();
     updateAdminStatus();
     renderAdminCountryList();
@@ -1274,17 +1282,28 @@ async function init() {
     return;
   }
 
-  await loadPlayers();
+  clearLegacyLocalGameStorage();
 
-  const apiReady = await checkCountryShapeApiDeployment();
-  if (!apiReady) {
-    showInputMessage("err", COUNTRY_API_NOT_DEPLOYED_MSG.replace("YOUR_WEB_APP_URL", COUNTRY_SHAPE_API_URL));
+  if (new URLSearchParams(location.search).get("reset") === "1") {
+    clearGameSession();
+    history.replaceState({}, "", location.pathname);
   }
 
-  fillGuessPlayerSelect();
+  const [playersLoaded, apiReady] = await Promise.all([
+    loadPlayers(),
+    checkCountryShapeApiDeployment()
+  ]);
+
+  if (!playersLoaded && !apiReady) {
+    showInputMessage("err", COUNTRY_API_NOT_DEPLOYED_MSG.replace("YOUR_WEB_APP_URL", COUNTRY_SHAPE_API_URL));
+  } else if (!apiReady) {
+    console.warn("Country by Shape API version check failed, continuing with loaded data.");
+  }
+
   bindGuessEvents();
   bindAdminEvents();
   await refreshGuessSession();
+  fillGuessPlayerSelect();
   showGuess();
 }
 
