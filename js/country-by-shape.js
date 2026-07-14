@@ -6,14 +6,45 @@ let COUNTRY_SHAPE_PLAYERS = [];
 
 const COUNTRY_COUNT = 20;
 const COUNTRY_POINT_POOL = 20;
-const SUBMIT_COUNTRY_RESULT_LABEL = "Submit result";
-const SUBMIT_COUNTRY_SENDING_LABEL = "⏳ submitting...";
 const REFRESH_COUNTRY_RESULTS_LABEL = "Refresh results";
 const REFRESH_COUNTRY_RESULTS_LOADING_LABEL = "⏳ loading...";
-const COUNTRY_ALREADY_SUBMITTED_MSG = "This person has already submitted a result. Select the next player to continue.";
 
-let COUNTRY_SHAPE_SUBMISSIONS = [];
-let COUNTRY_SUBMITTED_VOTERS = [];
+const storageKeyCountryGuessVoter = `${COUNTRY_SHAPE_EVENT_ID}:guessVoter`;
+const storageKeyLocalGuessesPrefix = `${COUNTRY_SHAPE_EVENT_ID}:localGuesses`;
+const SUBMIT_COUNTRY_GUESS_LABEL = "Submit guess";
+const SUBMIT_COUNTRY_GUESS_SENDING_LABEL = "⏳ submitting...";
+const ADMIN_START_TIMER_LABEL = "Start timer";
+const ADMIN_START_TIMER_SENDING_LABEL = "⏳ starting...";
+const ADMIN_END_TIMER_LABEL = "End timer";
+const ADMIN_END_TIMER_SENDING_LABEL = "⏳ ending...";
+const ADMIN_SUBMIT_CORRECT_LABEL = "Submit";
+const ADMIN_SUBMIT_CORRECT_SENDING_LABEL = "⏳ saving...";
+
+const COUNTRY_GUESS_WINDOW_SECONDS = 30;
+let guessCountdownIntervalId = null;
+let guessStatePollIntervalId = null;
+let guessSubmitInFlight = false;
+let adminSubmittingCountry = null;
+let pendingGuessChoices = {};
+let localTimerSecondsRemaining = 0;
+let localTimerRoundToken = 0;
+let localGuessingOpen = false;
+let finalSubmitTriggeredForToken = null;
+let timerExpiredHandledKey = null;
+const adminEndTimerSentKeyPrefix = `${COUNTRY_SHAPE_EVENT_ID}:adminEndSent`;
+
+let COUNTRY_GUESS_STATE = {
+  activeCountry: 1,
+  guessingOpen: false,
+  roundToken: 0,
+  guessCount: 0,
+  totalPlayers: 0,
+  guessedForActive: [],
+  userGuesses: {},
+  correctAnswers: {},
+  countriesCompleted: 0,
+  gameComplete: false
+};
 
 const COUNTRY_INPUT_PASSWORD = "Sina";
 const COUNTRY_INPUT_UNLOCK_KEY = `${COUNTRY_SHAPE_EVENT_ID}:inputUnlocked`;
@@ -74,23 +105,38 @@ function submitInputPassword() {
 }
 
 function openInputView() {
+  hideAllCountryViews();
   document.getElementById("inputView").style.display = "block";
-  document.getElementById("resultView").style.display = "none";
   setActiveTab("input");
-
-  const currentPlayer = document.getElementById("playerName").value.trim();
-  refreshCountryShapeSession({ selectedPlayerName: currentPlayer });
+  refreshAdminSession();
+  startGuessStatePolling();
 }
 
-const COUNTRY_API_NOT_DEPLOYED_MSG = "Country by Shape is not active on the API yet. Open YOUR_WEB_APP_URL?action=apiInfo — you should see version \"2026-07-14-country-shape\". If not: replace ALL of Code.gs with google-apps-script/Code.gs, then Deploy → Manage deployments → Edit → New version → Deploy.";
+const COUNTRY_API_NOT_DEPLOYED_MSG = "Country by Shape is not active on the API yet. Open YOUR_WEB_APP_URL?action=apiInfo — you should see version \"2026-07-14-country-shape-getrange-fix\". If not: replace ALL of Code.gs with google-apps-script/Code.gs, then Deploy → Manage deployments → Edit → New version → Deploy.";
 
 function isCountryShapeApiActive(data) {
   return data?.ok === true && data?.action === "apiInfo" &&
-    Array.isArray(data?.features) && data.features.includes("countryShapeSubmit");
+    Array.isArray(data?.features) && data.features.includes("countryShapeAdminEndTimer");
 }
 
-function isCountryShapeSubmitSuccess(data) {
-  return data?.ok === true && data?.action === "countryShape";
+function isCountryShapeGuessStateSuccess(data) {
+  return data?.ok === true && data?.action === "countryShapeGuessState";
+}
+
+function isCountryShapeGuessSubmitSuccess(data) {
+  return data?.ok === true && data?.action === "countryShapeGuessSubmit";
+}
+
+function isCountryShapeAdminStartTimerSuccess(data) {
+  return data?.ok === true && data?.action === "countryShapeAdminStartTimer";
+}
+
+function isCountryShapeAdminSubmitCorrectSuccess(data) {
+  return data?.ok === true && data?.action === "countryShapeAdminSubmitCorrect";
+}
+
+function isCountryShapeAdminEndTimerSuccess(data) {
+  return data?.ok === true && data?.action === "countryShapeAdminEndTimer";
 }
 
 function isCountryShapeResultsSuccess(data) {
@@ -139,107 +185,11 @@ function hideInputMessage() {
   el.textContent = "";
 }
 
-function setSubmitCountryButtonState(isSending) {
-  const btn = document.getElementById("submitCountryResultBtn");
-  if (!btn) return;
-  if (!isSending && btn.classList.contains("completed")) return;
-  btn.disabled = isSending;
-  btn.textContent = isSending ? SUBMIT_COUNTRY_SENDING_LABEL : SUBMIT_COUNTRY_RESULT_LABEL;
-}
-
 function setRefreshCountryResultsButtonState(isLoading) {
   const btn = document.getElementById("refreshResultBtn");
   if (!btn) return;
   btn.disabled = isLoading;
   btn.textContent = isLoading ? REFRESH_COUNTRY_RESULTS_LOADING_LABEL : REFRESH_COUNTRY_RESULTS_LABEL;
-}
-
-function getSelectedCorrectCountries() {
-  return Array.from(document.querySelectorAll(".country-correct-checkbox:checked"))
-    .map(checkbox => Number(checkbox.dataset.country))
-    .filter(country => Number.isInteger(country) && country >= 1 && country <= COUNTRY_COUNT)
-    .sort((a, b) => a - b);
-}
-
-function hasCountryShapePlayerSubmitted(playerName) {
-  const key = normalizePlayerName(playerName);
-  if (!key) return false;
-  return COUNTRY_SUBMITTED_VOTERS.some(name => normalizePlayerName(name) === key);
-}
-
-function getCountryShapeSubmission(playerName) {
-  const key = normalizePlayerName(playerName);
-  return COUNTRY_SHAPE_SUBMISSIONS.find(entry => normalizePlayerName(entry.voter) === key) || null;
-}
-
-function addCountryShapeSubmission(submission) {
-  const voter = String(submission?.voter || "").trim();
-  if (!voter) return;
-
-  COUNTRY_SHAPE_SUBMISSIONS = COUNTRY_SHAPE_SUBMISSIONS.filter(
-    entry => normalizePlayerName(entry.voter) !== normalizePlayerName(voter)
-  );
-  COUNTRY_SHAPE_SUBMISSIONS.push({
-    voter,
-    correctCountries: Array.isArray(submission.correctCountries) ? submission.correctCountries : []
-  });
-
-  if (!hasCountryShapePlayerSubmitted(voter)) {
-    COUNTRY_SUBMITTED_VOTERS.push(voter);
-    COUNTRY_SUBMITTED_VOTERS.sort((a, b) => a.localeCompare(b, "de"));
-  }
-}
-
-function getNextPendingPlayer(currentPlayerName = "") {
-  const startIndex = currentPlayerName
-    ? Math.max(0, COUNTRY_SHAPE_PLAYERS.findIndex(name => name === currentPlayerName) + 1)
-    : 0;
-
-  for (let index = startIndex; index < COUNTRY_SHAPE_PLAYERS.length; index++) {
-    const playerName = COUNTRY_SHAPE_PLAYERS[index];
-    if (!hasCountryShapePlayerSubmitted(playerName)) return playerName;
-  }
-
-  for (let index = 0; index < startIndex; index++) {
-    const playerName = COUNTRY_SHAPE_PLAYERS[index];
-    if (!hasCountryShapePlayerSubmitted(playerName)) return playerName;
-  }
-
-  return "";
-}
-
-function resetCountryShapeForm({ playerName = "" } = {}) {
-  document.querySelectorAll(".country-correct-checkbox").forEach(checkbox => {
-    checkbox.checked = false;
-    checkbox.disabled = false;
-  });
-
-  const btn = document.getElementById("submitCountryResultBtn");
-  btn.textContent = SUBMIT_COUNTRY_RESULT_LABEL;
-  btn.classList.remove("completed");
-  btn.disabled = false;
-
-  document.getElementById("playerName").disabled = false;
-  document.getElementById("playerName").value = playerName;
-  updateCorrectCounter();
-}
-
-function setCountryShapeReadOnlyUI(playerName) {
-  const submission = getCountryShapeSubmission(playerName);
-  const selected = new Set((submission?.correctCountries || []).map(Number));
-
-  document.querySelectorAll(".country-correct-checkbox").forEach(checkbox => {
-    checkbox.checked = selected.has(Number(checkbox.dataset.country));
-    checkbox.disabled = true;
-  });
-
-  const btn = document.getElementById("submitCountryResultBtn");
-  btn.textContent = "✅ Already submitted";
-  btn.classList.add("completed");
-  btn.disabled = true;
-
-  document.getElementById("playerName").disabled = false;
-  updateCorrectCounter();
 }
 
 async function checkCountryShapeApiDeployment() {
@@ -257,143 +207,860 @@ async function checkCountryShapeApiDeployment() {
 async function loadPlayers() {
   if (!COUNTRY_SHAPE_API_URL) {
     showInputMessage("err", "API_URL is not configured yet.");
+    showGuessMessage("err", "API_URL is not configured yet.");
     return;
   }
 
   try {
     const data = await jsonp(`${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=config`);
+    if (!data || data.ok !== true) {
+      showInputMessage("err", data?.error || "Could not load players from Google Sheets.");
+      showGuessMessage("err", data?.error || "Could not load players from Google Sheets.");
+      return;
+    }
+
     COUNTRY_SHAPE_PLAYERS = data.voters || [];
 
     if (COUNTRY_SHAPE_PLAYERS.length === 0) {
       showInputMessage("err", "No players found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
+      showGuessMessage("err", "No players found. Please fill in the 'Teilnehmer' tab in the Google Sheet.");
     }
   } catch (e) {
     showInputMessage("err", "Could not load players from Google Sheets.");
+    showGuessMessage("err", "Could not load players from Google Sheets.");
     console.error(e);
   }
 }
 
-async function loadCountryShapeSubmissions() {
-  if (!COUNTRY_SHAPE_API_URL) return;
+function fillGuessPlayerSelect() {
+  const sel = document.getElementById("guessPlayerName");
+  if (!sel) return;
 
-  try {
-    const data = await jsonp(`${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=countryShapeResults`);
+  const storedVoter = getStoredGuessVoter();
+  sel.innerHTML =
+    '<option value="">Please select your name</option>' +
+    COUNTRY_SHAPE_PLAYERS.map(name =>
+      `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
+    ).join("");
 
-    if (!isCountryShapeResultsSuccess(data)) {
-      console.warn("Country by Shape results endpoint is not available on the deployed API.", data);
-      COUNTRY_SHAPE_SUBMISSIONS = [];
-      COUNTRY_SUBMITTED_VOTERS = [];
-      return;
-    }
-
-    COUNTRY_SHAPE_SUBMISSIONS = Array.isArray(data.submissions) ? data.submissions : [];
-    COUNTRY_SUBMITTED_VOTERS = Array.isArray(data.submittedVoters) ? data.submittedVoters : [];
-  } catch (e) {
-    console.warn("Could not load Country by Shape submissions", e);
-    COUNTRY_SHAPE_SUBMISSIONS = [];
-    COUNTRY_SUBMITTED_VOTERS = [];
+  if (storedVoter && COUNTRY_SHAPE_PLAYERS.includes(storedVoter)) {
+    sel.value = storedVoter;
+    lockGuessPlayerSelect();
+  } else {
+    sel.disabled = false;
+    sel.selectedIndex = 0;
   }
 }
 
-function renderCountryList() {
-  const container = document.getElementById("countryList");
+function getStoredGuessVoter() {
+  return String(localStorage.getItem(storageKeyCountryGuessVoter) || "").trim();
+}
+
+function storeGuessVoter(voter) {
+  localStorage.setItem(storageKeyCountryGuessVoter, String(voter || "").trim());
+}
+
+function lockGuessPlayerSelect() {
+  const sel = document.getElementById("guessPlayerName");
+  if (sel) sel.disabled = true;
+}
+
+function showGuessMessage(type, text) {
+  const el = document.getElementById("guessMessage");
+  if (!el) return;
+  el.className = `msg ${type}`;
+  el.textContent = text;
+}
+
+function hideGuessMessage() {
+  const el = document.getElementById("guessMessage");
+  if (!el) return;
+  el.className = "msg";
+  el.textContent = "";
+}
+
+function showGuessControlMessage(type, text) {
+  showInputMessage(type, text);
+}
+
+function hideGuessControlMessage() {
+  hideInputMessage();
+}
+
+function getLocalGuessesStorageKey() {
+  const voter = getStoredGuessVoter() || document.getElementById("guessPlayerName")?.value.trim() || "";
+  if (!voter) return "";
+  return `${storageKeyLocalGuessesPrefix}:${normalizePlayerName(voter)}`;
+}
+
+function loadLocalFinalGuesses() {
+  const key = getLocalGuessesStorageKey();
+  if (!key) return {};
+
+  try {
+    return JSON.parse(localStorage.getItem(key) || "{}") || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveLocalFinalGuess(countryNumber, choice) {
+  const key = getLocalGuessesStorageKey();
+  if (!key || !Number.isInteger(choice)) return;
+
+  const data = loadLocalFinalGuesses();
+  data[String(countryNumber)] = choice;
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+function getLocalFinalGuess(countryNumber) {
+  const choice = loadLocalFinalGuesses()[String(countryNumber)];
+  return Number.isInteger(choice) ? choice : null;
+}
+
+function getUserGuessForCountry(countryNumber) {
+  const serverChoice = COUNTRY_GUESS_STATE.userGuesses[String(countryNumber)];
+  if (Number.isInteger(serverChoice)) return serverChoice;
+  return getLocalFinalGuess(countryNumber);
+}
+
+function formatGuessCountdown(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  return `0:${String(safeSeconds).padStart(2, "0")}`;
+}
+
+function isLocalGuessWindowOpen() {
+  return localGuessingOpen && localTimerSecondsRemaining > 0;
+}
+
+function stopLocalCountdown() {
+  if (guessCountdownIntervalId) {
+    clearInterval(guessCountdownIntervalId);
+    guessCountdownIntervalId = null;
+  }
+}
+
+function getTimerRoundKey(countryNumber, roundToken) {
+  return `${countryNumber}:${roundToken}`;
+}
+
+function resetLocalTimerForNewActiveCountry() {
+  localTimerRoundToken = 0;
+  localGuessingOpen = false;
+  localTimerSecondsRemaining = 0;
+  timerExpiredHandledKey = null;
+  finalSubmitTriggeredForToken = null;
+  stopLocalCountdown();
+}
+function isActiveCountryRoundClosed() {
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  if (COUNTRY_GUESS_STATE.correctAnswers[String(activeCountry)]) return true;
+
+  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
+  if (token <= 0) return false;
+
+  const roundKey = getTimerRoundKey(activeCountry, token);
+  return timerExpiredHandledKey === roundKey ||
+    (!COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen && localTimerSecondsRemaining <= 0 && localTimerRoundToken === token);
+}
+
+function syncLocalTimerFromServer() {
+  const roundToken = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
+  const guessingOpen = !!COUNTRY_GUESS_STATE.guessingOpen;
+
+  if (guessingOpen && roundToken > 0 && roundToken !== localTimerRoundToken) {
+    localTimerRoundToken = roundToken;
+    localGuessingOpen = true;
+    localTimerSecondsRemaining = COUNTRY_GUESS_WINDOW_SECONDS;
+    finalSubmitTriggeredForToken = null;
+    timerExpiredHandledKey = null;
+    startLocalCountdown();
+    renderGuessCountryList();
+    renderAdminCountryList();
+    return;
+  }
+
+  if (!guessingOpen && localGuessingOpen) {
+    onLocalTimerExpired(localTimerRoundToken);
+  }
+}
+
+function startLocalCountdown() {
+  stopLocalCountdown();
+  updateGuessCountdownDisplay(localTimerSecondsRemaining);
+
+  guessCountdownIntervalId = setInterval(() => {
+    localTimerSecondsRemaining = Math.max(0, localTimerSecondsRemaining - 1);
+    updateGuessCountdownDisplay(localTimerSecondsRemaining);
+
+    if (localTimerSecondsRemaining <= 0) {
+      onLocalTimerExpired(localTimerRoundToken);
+    }
+  }, 1000);
+}
+
+async function onLocalTimerExpired(roundToken) {
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const roundKey = getTimerRoundKey(activeCountry, roundToken);
+  if (!roundToken || timerExpiredHandledKey === roundKey) return;
+  timerExpiredHandledKey = roundKey;
+
+  localGuessingOpen = false;
+  localTimerSecondsRemaining = 0;
+  stopLocalCountdown();
+  updateGuessCountdownDisplay(0);
+
+  disableActiveGuessOptions();
+
+  await autoSubmitCountryGuess(getSelectedGuessChoice(activeCountry));
+
+  if (hasInputAccess()) {
+    const adminEndKey = `${adminEndTimerSentKeyPrefix}:${roundKey}`;
+    if (sessionStorage.getItem(adminEndKey) !== "true") {
+      sessionStorage.setItem(adminEndKey, "true");
+      await adminEndTimer(activeCountry, { auto: true });
+    }
+  } else {
+    renderGuessCountryList();
+    renderAdminCountryList();
+    updateGuessActiveInfo(0);
+    updateAdminStatus(0);
+  }
+}
+
+async function triggerFinalSubmitForRound(roundToken) {
+  await onLocalTimerExpired(roundToken);
+}
+
+function getCountryGuessStateSignature() {
+  return JSON.stringify({
+    activeCountry: COUNTRY_GUESS_STATE.activeCountry,
+    guessingOpen: COUNTRY_GUESS_STATE.guessingOpen,
+    roundToken: COUNTRY_GUESS_STATE.roundToken,
+    countriesCompleted: COUNTRY_GUESS_STATE.countriesCompleted,
+    gameComplete: COUNTRY_GUESS_STATE.gameComplete,
+    userGuesses: COUNTRY_GUESS_STATE.userGuesses
+  });
+}
+
+function rememberPendingGuessChoice(countryNumber, choice) {
+  const key = String(countryNumber);
+  if (Number.isInteger(choice) && choice >= 1 && choice <= 4) {
+    pendingGuessChoices[key] = choice;
+    return;
+  }
+  delete pendingGuessChoices[key];
+}
+
+function getPendingGuessChoice(countryNumber) {
+  const choice = pendingGuessChoices[String(countryNumber)];
+  return Number.isInteger(choice) ? choice : null;
+}
+
+function clearPendingGuessChoice(countryNumber) {
+  delete pendingGuessChoices[String(countryNumber)];
+}
+
+function trimPendingGuessChoices(activeCountry) {
+  Object.keys(pendingGuessChoices).forEach(key => {
+    if (Number(key) !== activeCountry) {
+      delete pendingGuessChoices[key];
+    }
+  });
+}
+
+function isGuessViewVisible() {
+  const guessView = document.getElementById("guessView");
+  return !!guessView && guessView.style.display !== "none";
+}
+
+function isInputViewVisible() {
+  const inputView = document.getElementById("inputView");
+  return !!inputView && inputView.style.display !== "none";
+}
+
+async function pollLiveGuessState() {
+  if (!isGuessViewVisible() && !isInputViewVisible()) return;
+
+  const previousSignature = getCountryGuessStateSignature();
+  await loadCountryGuessState();
+
+  if (previousSignature === getCountryGuessStateSignature()) {
+    if (isGuessViewVisible()) {
+      updateGuessActiveInfo();
+      updateGuessSubmitButtonState();
+    }
+    if (isInputViewVisible()) {
+      updateAdminStatus();
+    }
+    return;
+  }
+
+  const previousState = JSON.parse(previousSignature);
+  const nextState = getCountryGuessStateSignature();
+  const parsedNext = JSON.parse(nextState);
+  if (previousState.activeCountry !== parsedNext.activeCountry) {
+    trimPendingGuessChoices(parsedNext.activeCountry);
+    resetLocalTimerForNewActiveCountry();
+  }
+
+  if (isGuessViewVisible()) {
+    updateGuessActiveInfo();
+    renderGuessCountryList();
+  }
+
+  if (isInputViewVisible()) {
+    updateAdminStatus();
+    renderAdminCountryList();
+  }
+
+  syncLocalTimerFromServer();
+  restartGuessStatePolling();
+}
+
+function getGuessPollIntervalMs() {
+  return COUNTRY_GUESS_STATE.guessingOpen || localGuessingOpen ? 2000 : 10000;
+}
+
+function restartGuessStatePolling() {
+  stopGuessStatePolling();
+  if (!isGuessViewVisible() && !isInputViewVisible()) return;
+
+  guessStatePollIntervalId = setInterval(() => {
+    pollLiveGuessState();
+  }, getGuessPollIntervalMs());
+}
+
+function startGuessStatePolling() {
+  restartGuessStatePolling();
+}
+
+function stopGuessStatePolling() {
+  if (guessStatePollIntervalId) {
+    clearInterval(guessStatePollIntervalId);
+    guessStatePollIntervalId = null;
+  }
+}
+
+function updateGuessCountdownDisplay(seconds) {
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  document.querySelectorAll(".country-guess-countdown").forEach(el => {
+    if (Number(el.dataset.country) === activeCountry || el.id === `guess-countdown-${activeCountry}` || el.id === `admin-countdown-${activeCountry}`) {
+      el.textContent = seconds > 0 ? formatGuessCountdown(seconds) : "0:00";
+    }
+  });
+
+  const guessCountdownEl = document.getElementById(`guess-countdown-${activeCountry}`);
+  if (guessCountdownEl) {
+    guessCountdownEl.textContent = seconds > 0 ? formatGuessCountdown(seconds) : "0:00";
+  }
+
+  const adminCountdownEl = document.getElementById(`admin-countdown-${activeCountry}`);
+  if (adminCountdownEl) {
+    adminCountdownEl.textContent = seconds > 0 ? formatGuessCountdown(seconds) : "0:00";
+  }
+
+  updateGuessActiveInfo(seconds);
+  updateAdminStatus(seconds);
+}
+
+function disableActiveGuessOptions() {
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  document.querySelectorAll(`input[name="guess-country-${activeCountry}"]`).forEach(input => {
+    input.disabled = true;
+  });
+  updateGuessSubmitButtonState();
+}
+
+function updateAdminStatus(seconds = localTimerSecondsRemaining) {
+  const status = document.getElementById("adminStatus");
+  if (!status) return;
+
+  if (COUNTRY_GUESS_STATE.gameComplete || COUNTRY_GUESS_STATE.activeCountry > COUNTRY_COUNT) {
+    status.textContent = `All ${COUNTRY_COUNT} countries completed.`;
+    return;
+  }
+
+  const timerLabel = !COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen
+    ? "ready for start · "
+    : (seconds > 0 ? `${formatGuessCountdown(seconds)} left · ` : "time is up · ");
+
+  status.textContent =
+    `Active country: Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}${COUNTRY_GUESS_STATE.guessCount}/${COUNTRY_GUESS_STATE.totalPlayers} guessed · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} completed`;
+}
+
+function updateGuessActiveInfo(seconds = localTimerSecondsRemaining) {
+  const info = document.getElementById("guessActiveInfo");
+  if (!info) return;
+
+  if (COUNTRY_GUESS_STATE.gameComplete || COUNTRY_GUESS_STATE.activeCountry > COUNTRY_COUNT) {
+    info.textContent = `Game complete · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} countries resolved`;
+    return;
+  }
+
+  const timerLabel = !COUNTRY_GUESS_STATE.guessingOpen && !localGuessingOpen
+    ? "waiting for admin start · "
+    : (seconds > 0 ? `${formatGuessCountdown(seconds)} left · ` : "locked · ");
+
+  info.textContent =
+    `Open country: Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}${COUNTRY_GUESS_STATE.guessCount}/${COUNTRY_GUESS_STATE.totalPlayers} guessed`;
+}
+
+async function loadCountryGuessState() {
+  if (!COUNTRY_SHAPE_API_URL) return;
+
+  const voter = getStoredGuessVoter() || document.getElementById("guessPlayerName")?.value.trim() || "";
+  const voterParam = voter ? `&voter=${encodeURIComponent(voter)}` : "";
+
+  try {
+    const data = await jsonp(
+      `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=countryShapeGuessState${voterParam}`
+    );
+
+    if (!isCountryShapeGuessStateSuccess(data)) {
+      return;
+    }
+
+    COUNTRY_GUESS_STATE = {
+      activeCountry: Number(data.activeCountry) || 1,
+      guessingOpen: !!data.guessingOpen,
+      roundToken: Number(data.roundToken) || 0,
+      guessCount: Number(data.guessCount) || 0,
+      totalPlayers: Number(data.totalPlayers) || COUNTRY_SHAPE_PLAYERS.length,
+      guessedForActive: Array.isArray(data.guessedForActive) ? data.guessedForActive : [],
+      userGuesses: data.userGuesses || {},
+      correctAnswers: data.correctAnswers || {},
+      countriesCompleted: Number(data.countriesCompleted) || 0,
+      gameComplete: !!data.gameComplete
+    };
+
+    syncLocalTimerFromServer();
+  } catch (e) {
+    console.warn("Could not load Country by Shape guess state", e);
+  }
+}
+
+function getSelectedGuessChoice(countryNumber) {
+  const selected = document.querySelector(`input[name="guess-country-${countryNumber}"]:checked`);
+  if (selected) {
+    return Number(selected.value);
+  }
+  return getPendingGuessChoice(countryNumber);
+}
+
+function getCountryGuessRowStatus(countryNumber) {
+  const userChoice = getUserGuessForCountry(countryNumber);
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+
+  if (COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)]) {
+    return userChoice ? "done" : "closed";
+  }
+
+  if (userChoice && countryNumber <= activeCountry) return "done";
+
+  if (countryNumber === activeCountry + 1 && isActiveCountryRoundClosed()) {
+    return "up-next";
+  }
+
+  if (countryNumber === activeCountry) {
+    if (isLocalGuessWindowOpen()) return "active";
+    if (isActiveCountryRoundClosed()) return userChoice ? "done" : "missed";
+    return "waiting";
+  }
+
+  if (countryNumber < activeCountry) return userChoice ? "done" : "missed";
+  return "locked";
+}
+
+function getCountryGuessStatusLabel(status, countryNumber) {
+  const userChoice = getUserGuessForCountry(countryNumber);
+  if (status === "done" && userChoice) return `Your guess: option ${userChoice}`;
+  if (status === "done") return "Submitted";
+  if (status === "active") return "Change anytime";
+  if (status === "waiting") return "Waiting for timer";
+  if (status === "up-next") return "Next · waiting for timer";
+  if (status === "closed") return "Resolved";
+  if (status === "missed" && userChoice) return `Your guess: option ${userChoice}`;
+  if (status === "missed") return "No guess";
+  return "Locked";
+}
+
+function renderGuessCountryList() {
+  const container = document.getElementById("guessCountryList");
+  if (!container) return;
 
   container.innerHTML = Array.from({ length: COUNTRY_COUNT }, (_, index) => {
     const countryNumber = index + 1;
-    const countryId = `country-${countryNumber}`;
-    const checkboxId = `country-correct-${countryNumber}`;
+    const status = getCountryGuessRowStatus(countryNumber);
+    const userChoice = getUserGuessForCountry(countryNumber);
+    const pendingChoice = getPendingGuessChoice(countryNumber);
+    const displayChoice = userChoice || (status === "active" ? pendingChoice : null);
+    const isInteractive = status === "active";
+    const options = [1, 2, 3, 4];
+    const showCountdown = status === "active" || (countryNumber === COUNTRY_GUESS_STATE.activeCountry && localGuessingOpen);
+    const countdownHtml = showCountdown
+      ? `<span class="country-guess-countdown" id="guess-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(localTimerSecondsRemaining)}</span>`
+      : "";
 
     return `
-      <div class="country-row">
-        <span class="country-label" id="${countryId}">Country ${countryNumber}</span>
-        <label class="country-correct-label" for="${checkboxId}">
-          <input type="checkbox" id="${checkboxId}" class="country-correct-checkbox" data-country="${countryNumber}" />
-          <span>correct</span>
-        </label>
+      <div class="country-guess-row country-guess-row-${status}">
+        <div class="country-guess-row-head">
+          <span class="country-label">Country ${countryNumber}</span>
+          <span class="country-guess-status-wrap">
+            ${countdownHtml}
+            <span class="country-guess-status">${getCountryGuessStatusLabel(status, countryNumber)}</span>
+          </span>
+        </div>
+        <div class="country-guess-options">
+          ${options.map(choice => `
+            <label class="country-guess-option-label">
+              <input
+                type="radio"
+                name="guess-country-${countryNumber}"
+                class="country-guess-option"
+                value="${choice}"
+                ${displayChoice === choice ? "checked" : ""}
+                ${isInteractive ? "" : "disabled"}
+              />
+              <span>${choice}</span>
+            </label>
+          `).join("")}
+        </div>
+        ${userChoice && status !== "active" ? `<p class="country-admin-saved-choice">Your guess: option ${userChoice}</p>` : ""}
       </div>
     `;
   }).join("");
 
-  bindCountryCheckboxEvents();
-  updateCorrectCounter();
+  updateGuessSubmitButtonState();
 }
 
-function getCorrectCount() {
-  return getSelectedCorrectCountries().length;
+function updateGuessSubmitButtonState() {
+  const btn = document.getElementById("submitCountryGuessBtn");
+  const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const hasSubmittedActive = !!getUserGuessForCountry(activeCountry);
+  const selectedChoice = getSelectedGuessChoice(activeCountry);
+  const windowOpen = isLocalGuessWindowOpen();
+
+  if (!btn) return;
+  btn.textContent = SUBMIT_COUNTRY_GUESS_LABEL;
+  btn.disabled = !playerName || hasSubmittedActive || !selectedChoice || !windowOpen;
 }
 
-function updateCorrectCounter() {
-  const counter = document.getElementById("correctCounter");
-  if (!counter) return;
-
-  const correctCount = getCorrectCount();
-  counter.textContent = `${correctCount}/${COUNTRY_COUNT} correct`;
+function setSubmitCountryGuessButtonState(isSending) {
+  const btn = document.getElementById("submitCountryGuessBtn");
+  if (!btn) return;
+  btn.disabled = isSending;
+  btn.textContent = isSending ? SUBMIT_COUNTRY_GUESS_SENDING_LABEL : SUBMIT_COUNTRY_GUESS_LABEL;
 }
 
-function bindCountryCheckboxEvents() {
-  document.querySelectorAll(".country-correct-checkbox").forEach(checkbox => {
-    checkbox.addEventListener("change", updateCorrectCounter);
-  });
+function buildCountryShapeGuessSubmitUrl(payload) {
+  return `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(payload.eventId)}&action=countryShapeGuessSubmit&voter=${encodeURIComponent(payload.voter)}&country=${encodeURIComponent(payload.country)}&choice=${encodeURIComponent(payload.choice)}`;
 }
 
-function fillPlayerSelect(selectedPlayerName = "") {
-  const sel = document.getElementById("playerName");
-  const pendingPlayers = COUNTRY_SHAPE_PLAYERS.filter(name => !hasCountryShapePlayerSubmitted(name));
-  const defaultPlayer = selectedPlayerName || pendingPlayers[0] || "";
-
-  sel.disabled = false;
-  sel.innerHTML =
-    '<option value="">Please select a player</option>' +
-    COUNTRY_SHAPE_PLAYERS.map(name => {
-      const submitted = hasCountryShapePlayerSubmitted(name);
-      const suffix = submitted ? " ✅" : "";
-      return `<option value="${escapeHtml(name)}">${escapeHtml(name)}${suffix}</option>`;
-    }).join("");
-
-  sel.value = defaultPlayer;
-  handlePlayerSelection();
+function buildCountryShapeAdminStartTimerUrl(country) {
+  return `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=countryShapeAdminStartTimer&country=${encodeURIComponent(country)}`;
 }
 
-function handlePlayerSelection() {
-  const playerName = document.getElementById("playerName").value.trim();
+function buildCountryShapeAdminSubmitCorrectUrl(country, choice) {
+  return `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=countryShapeAdminSubmitCorrect&country=${encodeURIComponent(country)}&choice=${encodeURIComponent(choice)}`;
+}
+
+function buildCountryShapeAdminEndTimerUrl(country) {
+  return `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(COUNTRY_SHAPE_EVENT_ID)}&action=countryShapeAdminEndTimer&country=${encodeURIComponent(country)}`;
+}
+
+async function refreshGuessSession() {
+  stopLocalCountdown();
+  await loadCountryGuessState();
+  trimPendingGuessChoices(COUNTRY_GUESS_STATE.activeCountry);
+  updateAdminStatus();
+  updateGuessActiveInfo();
+  renderGuessCountryList();
+  renderAdminCountryList();
+}
+
+async function refreshAdminSession() {
+  stopLocalCountdown();
+  await loadCountryGuessState();
+  updateAdminStatus();
+  renderAdminCountryList();
+}
+
+async function autoSubmitCountryGuess(forcedChoice = null) {
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
+  const choice = forcedChoice ?? getSelectedGuessChoice(activeCountry);
 
   if (!playerName) {
-    resetCountryShapeForm();
+    showGuessMessage("err", `Time is up for Country ${activeCountry}. Please select your name before the timer ends.`);
+    await refreshGuessSession();
+    return;
+  }
+
+  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] || getLocalFinalGuess(activeCountry)) {
+    return;
+  }
+
+  if (!choice) {
+    showGuessMessage("err", `Time is up for Country ${activeCountry}. No option was selected.`);
+    await refreshGuessSession();
+    return;
+  }
+
+  saveLocalFinalGuess(activeCountry, choice);
+  await submitCountryGuess({ auto: true, choice });
+}
+
+async function submitCountryGuess({ auto = false, choice: forcedChoice = null } = {}) {
+  if (guessSubmitInFlight) return false;
+
+  const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
+  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const choice = forcedChoice ?? getSelectedGuessChoice(activeCountry);
+
+  if (!playerName) {
+    if (!auto) showGuessMessage("err", "Please select your name before submitting.");
+    return false;
+  }
+
+  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] || getLocalFinalGuess(activeCountry)) {
+    if (!auto) showGuessMessage("ok", "You have already submitted your guess for this country.");
+    updateGuessSubmitButtonState();
+    return false;
+  }
+
+  if (!choice) {
+    if (!auto) showGuessMessage("err", "Please choose one option (1, 2, 3 or 4).");
+    return false;
+  }
+
+  if (!auto && !isLocalGuessWindowOpen()) {
+    showGuessMessage("err", "The guessing window for this country has closed.");
+    return false;
+  }
+
+  if (!COUNTRY_SHAPE_API_URL) {
+    if (!auto) showGuessMessage("err", "API_URL is not configured yet.");
+    return false;
+  }
+
+  const payload = {
+    eventId: COUNTRY_SHAPE_EVENT_ID,
+    voter: playerName,
+    country: activeCountry,
+    choice
+  };
+
+  try {
+    guessSubmitInFlight = true;
+    setSubmitCountryGuessButtonState(true);
+    if (!auto) hideGuessMessage();
+
+    saveLocalFinalGuess(activeCountry, choice);
+    COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] = choice;
+    renderGuessCountryList();
+
+    const data = await jsonp(buildCountryShapeGuessSubmitUrl(payload));
+    if (!isCountryShapeGuessSubmitSuccess(data)) {
+      showGuessMessage("err", data?.error || (auto ? "Auto-submit failed." : "Guess submission failed."));
+      finalSubmitTriggeredForToken = null;
+      return false;
+    }
+
+    clearPendingGuessChoice(activeCountry);
+    saveLocalFinalGuess(activeCountry, choice);
+    COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] = choice;
+
+    storeGuessVoter(playerName);
+    lockGuessPlayerSelect();
+    stopLocalCountdown();
+    localGuessingOpen = false;
+    localTimerSecondsRemaining = 0;
+    renderGuessCountryList();
+
+    if (auto) {
+      showGuessMessage("ok", `Final choice submitted for Country ${activeCountry}: option ${choice}.`);
+    } else {
+      showGuessMessage("ok", `Guess saved for Country ${activeCountry}: option ${choice}.`);
+    }
+
+    return true;
+  } catch (e) {
+    if (!auto) showGuessMessage("err", "Guess submission failed. Please check your connection.");
+    console.error(e);
+    return false;
+  } finally {
+    guessSubmitInFlight = false;
+    setSubmitCountryGuessButtonState(false);
+    updateGuessSubmitButtonState();
+  }
+}
+
+function getAdminCountryRowStatus(countryNumber) {
+  const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
+  if (savedChoice) return "done";
+  if (countryNumber === COUNTRY_GUESS_STATE.activeCountry) {
+    return localGuessingOpen || COUNTRY_GUESS_STATE.guessingOpen ? "active" : "waiting";
+  }
+  if (countryNumber === COUNTRY_GUESS_STATE.activeCountry + 1 && isActiveCountryRoundClosed()) {
+    return "up-next";
+  }
+  return "locked";
+}
+
+function getAdminCountryStatusLabel(status, countryNumber) {
+  if (status === "done") {
+    const choice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
+    return `Saved: option ${choice}`;
+  }
+  if (status === "active") return "Timer running";
+  if (status === "waiting") return "Start timer";
+  if (status === "up-next") return "Next · waiting for timer";
+  return "Locked";
+}
+
+function getSelectedAdminChoice(countryNumber) {
+  const selected = document.querySelector(`input[name="admin-country-${countryNumber}"]:checked`);
+  return selected ? Number(selected.value) : null;
+}
+
+function renderAdminCountryList() {
+  const container = document.getElementById("adminCountryList");
+  if (!container) return;
+
+  container.innerHTML = Array.from({ length: COUNTRY_COUNT }, (_, index) => {
+    const countryNumber = index + 1;
+    const status = getAdminCountryRowStatus(countryNumber);
+    const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
+    const isActiveRow = countryNumber === COUNTRY_GUESS_STATE.activeCountry;
+    const isInteractive = isActiveRow && status !== "done";
+    const timerRunning = isActiveRow && (localGuessingOpen || COUNTRY_GUESS_STATE.guessingOpen);
+    const canStartTimer = isActiveRow && !timerRunning && !savedChoice;
+    const canSubmitCorrect = isActiveRow && !timerRunning && !savedChoice;
+    const showCountdown = isActiveRow && localGuessingOpen;
+    const countdownHtml = showCountdown
+      ? `<span class="country-guess-countdown" id="admin-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(localTimerSecondsRemaining)}</span>`
+      : "";
+
+    return `
+      <div class="country-guess-row country-guess-row-${status}">
+        <div class="country-guess-row-head">
+          <span class="country-label">Country ${countryNumber}</span>
+          <span class="country-guess-status-wrap">
+            ${countdownHtml}
+            <span class="country-guess-status">${getAdminCountryStatusLabel(status, countryNumber)}</span>
+          </span>
+        </div>
+        <div class="country-guess-options">
+          ${[1, 2, 3, 4].map(choice => `
+            <label class="country-guess-option-label">
+              <input
+                type="radio"
+                name="admin-country-${countryNumber}"
+                class="country-admin-option"
+                value="${choice}"
+                data-country="${countryNumber}"
+                ${savedChoice === choice ? "checked" : ""}
+                ${canSubmitCorrect ? "" : "disabled"}
+              />
+              <span>${choice}</span>
+            </label>
+          `).join("")}
+        </div>
+        ${isActiveRow && !savedChoice ? `
+          <div class="country-admin-actions">
+            <button
+              type="button"
+              class="secondary"
+              id="admin-start-timer-${countryNumber}"
+              onclick="adminStartTimer(${countryNumber})"
+              ${canStartTimer ? "" : "disabled"}
+            >${ADMIN_START_TIMER_LABEL}</button>
+            <button
+              type="button"
+              id="admin-submit-${countryNumber}"
+              onclick="adminSubmitCorrect(${countryNumber})"
+              ${canSubmitCorrect ? "" : "disabled"}
+            >${ADMIN_SUBMIT_CORRECT_LABEL}</button>
+          </div>
+        ` : (savedChoice ? `<p class="country-admin-saved-choice">Correct answer: option ${savedChoice}</p>` : "")}
+      </div>
+    `;
+  }).join("");
+}
+
+async function adminStartTimer(countryNumber) {
+  if (!COUNTRY_SHAPE_API_URL) {
+    showInputMessage("err", "API_URL is not configured yet.");
+    return;
+  }
+
+  try {
     hideInputMessage();
+    const btn = document.getElementById(`admin-start-timer-${countryNumber}`);
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = ADMIN_START_TIMER_SENDING_LABEL;
+    }
+
+    const data = await jsonp(buildCountryShapeAdminStartTimerUrl(countryNumber));
+    if (!isCountryShapeAdminStartTimerSuccess(data)) {
+      showInputMessage("err", data?.error || "Could not start timer.");
+      renderAdminCountryList();
+      return;
+    }
+
+    await refreshAdminSession();
+    showInputMessage("ok", `Timer started for Country ${countryNumber}. All players have 30 seconds.`);
+  } catch (e) {
+    showInputMessage("err", "Could not start timer. Please check your connection.");
+    console.error(e);
+    renderAdminCountryList();
+  }
+}
+
+async function adminEndTimer(countryNumber, { auto = false } = {}) {
+  if (!COUNTRY_SHAPE_API_URL) {
+    if (!auto) showInputMessage("err", "API_URL is not configured yet.");
     return;
   }
 
-  if (hasCountryShapePlayerSubmitted(playerName)) {
-    setCountryShapeReadOnlyUI(playerName);
-    showInputMessage("ok", COUNTRY_ALREADY_SUBMITTED_MSG);
-    return;
+  try {
+    if (!auto) hideInputMessage();
+
+    const data = await jsonp(buildCountryShapeAdminEndTimerUrl(countryNumber));
+    if (!isCountryShapeAdminEndTimerSuccess(data)) {
+      if (!auto) showInputMessage("err", data?.error || "Could not end timer.");
+      renderAdminCountryList();
+      return;
+    }
+
+    COUNTRY_GUESS_STATE.guessingOpen = false;
+    localGuessingOpen = false;
+    localTimerSecondsRemaining = 0;
+    stopLocalCountdown();
+    await loadCountryGuessState();
+    updateAdminStatus(0);
+    updateGuessActiveInfo(0);
+    renderAdminCountryList();
+    renderGuessCountryList();
+
+    if (!auto) {
+      showInputMessage("ok", `Guessing closed for Country ${countryNumber}. Final choices are being submitted.`);
+    }
+  } catch (e) {
+    if (!auto) showInputMessage("err", "Could not end timer. Please check your connection.");
+    console.error(e);
+    renderAdminCountryList();
   }
-
-  resetCountryShapeForm({ playerName });
-  hideInputMessage();
 }
 
-async function refreshCountryShapeSession({ selectedPlayerName = "" } = {}) {
-  await loadCountryShapeSubmissions();
-  fillPlayerSelect(selectedPlayerName);
-}
+async function adminSubmitCorrect(countryNumber) {
+  const choice = getSelectedAdminChoice(countryNumber);
 
-function buildCountryShapeSubmitUrl(payload) {
-  const countries = (payload.correctCountries || []).join(",");
-  return `${COUNTRY_SHAPE_API_URL}?eventId=${encodeURIComponent(payload.eventId)}&action=countryShapeSubmit&voter=${encodeURIComponent(payload.voter)}&correctCountries=${encodeURIComponent(countries)}`;
-}
-
-async function submitCountryResult() {
-  const playerName = document.getElementById("playerName").value.trim();
-  const correctCountries = getSelectedCorrectCountries();
-
-  if (!playerName) {
-    showInputMessage("err", "Please select a player before submitting.");
-    return;
-  }
-
-  if (hasCountryShapePlayerSubmitted(playerName)) {
-    handlePlayerSelection();
+  if (!choice) {
+    showInputMessage("err", "Please choose the correct option (1, 2, 3 or 4).");
     return;
   }
 
@@ -402,57 +1069,77 @@ async function submitCountryResult() {
     return;
   }
 
-  const payload = {
-    eventId: COUNTRY_SHAPE_EVENT_ID,
-    voter: playerName,
-    correctCountries
-  };
-
   try {
-    setSubmitCountryButtonState(true);
+    hideInputMessage();
+    adminSubmittingCountry = countryNumber;
+    renderAdminCountryList();
 
-    const data = await jsonp(buildCountryShapeSubmitUrl(payload));
+    const data = await jsonp(buildCountryShapeAdminSubmitCorrectUrl(countryNumber, choice));
+    if (!isCountryShapeAdminSubmitCorrectSuccess(data)) {
+      showInputMessage("err", data?.error || "Could not save correct answer.");
+      adminSubmittingCountry = null;
+      renderAdminCountryList();
+      return;
+    }
 
-    if (!isCountryShapeSubmitSuccess(data)) {
-      if (data?.ok === true && data?.results) {
-        showInputMessage("err", COUNTRY_API_NOT_DEPLOYED_MSG.replace("YOUR_WEB_APP_URL", COUNTRY_SHAPE_API_URL));
+    adminSubmittingCountry = null;
+    resetLocalTimerForNewActiveCountry();
+    await loadCountryGuessState();
+    updateAdminStatus();
+    renderAdminCountryList();
+    renderGuessCountryList();
+
+    if (data.gameComplete) {
+      showInputMessage("ok", `Country ${countryNumber} saved (option ${choice}). All countries are complete.`);
+    } else {
+      showInputMessage("ok", `Country ${countryNumber} saved (option ${choice}). Country ${data.activeCountry} is now active.`);
+    }
+  } catch (e) {
+    adminSubmittingCountry = null;
+    showInputMessage("err", "Could not save correct answer. Please check your connection.");
+    console.error(e);
+    renderAdminCountryList();
+  }
+}
+
+function bindAdminEvents() {
+  const list = document.getElementById("adminCountryList");
+  if (!list || list.dataset.bound === "true") return;
+  list.dataset.bound = "true";
+
+  list.addEventListener("change", () => {
+    hideInputMessage();
+  });
+}
+
+function bindGuessEvents() {
+  const playerSel = document.getElementById("guessPlayerName");
+  if (playerSel) {
+    playerSel.addEventListener("change", async () => {
+      hideGuessMessage();
+      await refreshGuessSession();
+    });
+  }
+
+  const list = document.getElementById("guessCountryList");
+  if (list) {
+    list.addEventListener("change", (event) => {
+      const input = event.target;
+      if (input?.classList?.contains("country-guess-option")) {
+        const countryNumber = Number(String(input.name || "").replace("guess-country-", ""));
+        rememberPendingGuessChoice(countryNumber, Number(input.value));
+        const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
+        if (!playerName) {
+          showGuessMessage("err", "Please select your name before the timer ends.");
+        } else {
+          hideGuessMessage();
+        }
+        updateGuessSubmitButtonState();
         return;
       }
-
-      showInputMessage("err", data?.error || "Submission failed.");
-      return;
-    }
-
-    await loadCountryShapeSubmissions();
-
-    if (!hasCountryShapePlayerSubmitted(playerName)) {
-      showInputMessage("err", "Submission was accepted by the API but not stored. Please redeploy google-apps-script/Code.gs and try again.");
-      return;
-    }
-
-    const nextPlayer = getNextPendingPlayer(playerName);
-    const submitCount = COUNTRY_SUBMITTED_VOTERS.length;
-    const playerTotal = COUNTRY_SHAPE_PLAYERS.length;
-
-    if (nextPlayer) {
-      fillPlayerSelect(nextPlayer);
-      showInputMessage(
-        "ok",
-        `${playerName} saved (${correctCountries.length}/${COUNTRY_COUNT} correct). ${submitCount}/${playerTotal} done — continue with ${nextPlayer}.`
-      );
-    } else {
-      setCountryShapeReadOnlyUI(playerName);
-      showInputMessage(
-        "ok",
-        `${playerName} saved (${correctCountries.length}/${COUNTRY_COUNT} correct). All ${playerTotal} players are done.`
-      );
-    }
-
-  } catch (e) {
-    showInputMessage("err", "Submission failed. Please check your connection.");
-    console.error(e);
-  } finally {
-    setSubmitCountryButtonState(false);
+      hideGuessMessage();
+      updateGuessSubmitButtonState();
+    });
   }
 }
 
@@ -461,78 +1148,25 @@ function formatCountryPoints(points) {
   return rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2);
 }
 
-function buildCountryCorrectCounts(submissions) {
-  const counts = {};
-  for (let country = 1; country <= COUNTRY_COUNT; country++) {
-    counts[country] = 0;
-  }
-
-  submissions.forEach(submission => {
-    (submission.correctCountries || []).forEach(country => {
-      const countryNumber = Number(country);
-      if (countryNumber >= 1 && countryNumber <= COUNTRY_COUNT) {
-        counts[countryNumber]++;
-      }
-    });
-  });
-
-  return counts;
-}
-
-function calculateCountryShapeRankings(submissions) {
-  const countryCorrectCounts = buildCountryCorrectCounts(submissions);
-  const allPlayers = COUNTRY_SHAPE_PLAYERS.map(name => String(name).trim()).filter(Boolean);
-  const submissionByPlayer = {};
-
-  submissions.forEach(submission => {
-    submissionByPlayer[submission.voter] = submission;
-  });
-
-  const rankings = allPlayers.map(playerName => {
-    const submission = submissionByPlayer[playerName];
-    let points = 0;
-
-    if (submission) {
-      (submission.correctCountries || []).forEach(country => {
-        const countryNumber = Number(country);
-        const correctCount = countryCorrectCounts[countryNumber] || 0;
-        if (correctCount > 0) {
-          points += COUNTRY_POINT_POOL / correctCount;
-        }
-      });
-    }
-
-    return {
-      playerName,
-      points,
-      submitted: !!submission,
-      correctCount: submission ? submission.correctCountries.length : 0
-    };
-  });
-
-  rankings.sort((a, b) => b.points - a.points || a.playerName.localeCompare(b.playerName, "de"));
-  return rankings;
-}
-
 function renderCountryResults(data) {
   const container = document.getElementById("countryResults");
-  const submissions = Array.isArray(data.submissions) ? data.submissions : [];
-  const rankings = calculateCountryShapeRankings(submissions);
-  const submitCount = Number(data.submitCount ?? submissions.length) || 0;
-  const playerTotal = COUNTRY_SHAPE_PLAYERS.length;
+  const rankings = Array.isArray(data.rankings) ? data.rankings : [];
+  const countriesCompleted = Number(data.countriesCompleted) || 0;
+  const countryCount = Number(data.countryCount) || COUNTRY_COUNT;
+  const pointPool = Number(data.pointPool) || COUNTRY_POINT_POOL;
   const maxPoints = Math.max(1, ...rankings.map(entry => entry.points || 0));
 
   container.innerHTML = `
     <div class="result-stats">
       <div class="stat">
         <div class="stat-inline">
-          <b>${submitCount} / ${playerTotal}</b>
-          <span class="stat-label">Results submitted</span>
+          <b>${countriesCompleted} / ${countryCount}</b>
+          <span class="stat-label">Countries resolved</span>
         </div>
       </div>
       <div class="stat">
         <div class="stat-inline">
-          <b>${COUNTRY_POINT_POOL}</b>
+          <b>${pointPool}</b>
           <span class="stat-label">Points per country (shared)</span>
         </div>
       </div>
@@ -552,7 +1186,7 @@ function renderCountryResults(data) {
             <td class="rank">${index + 1}</td>
             <td>
               <span class="country-result-name">${escapeHtml(entry.playerName)}</span>
-              ${entry.submitted ? `<span class="small country-result-meta">${entry.correctCount}/${COUNTRY_COUNT} correct</span>` : `<span class="small country-result-meta">not submitted</span>`}
+              <span class="small country-result-meta">${entry.correctCount || 0}/${countriesCompleted || countryCount} correct · ${entry.guessedCount || 0} guesses</span>
             </td>
             <td><b>${formatCountryPoints(entry.points)}</b></td>
             <td><div class="bar"><span style="width:${Math.round((entry.points / maxPoints) * 100)}%"></span></div></td>
@@ -586,8 +1220,6 @@ function loadCountryResults() {
         return;
       }
 
-      COUNTRY_SHAPE_SUBMISSIONS = Array.isArray(data.submissions) ? data.submissions : [];
-      COUNTRY_SUBMITTED_VOTERS = Array.isArray(data.submittedVoters) ? data.submittedVoters : [];
       renderCountryResults(data || {});
     })
     .catch(() => {
@@ -597,7 +1229,23 @@ function loadCountryResults() {
     .finally(() => setRefreshCountryResultsButtonState(false));
 }
 
+function hideAllCountryViews() {
+  stopGuessStatePolling();
+  document.getElementById("guessView").style.display = "none";
+  document.getElementById("inputView").style.display = "none";
+  document.getElementById("resultView").style.display = "none";
+}
+
+function showGuess() {
+  hideAllCountryViews();
+  document.getElementById("guessView").style.display = "block";
+  setActiveTab("guess");
+  refreshGuessSession();
+  startGuessStatePolling();
+}
+
 function setActiveTab(tab) {
+  document.getElementById("tabGuessBtn").classList.toggle("active", tab === "guess");
   document.getElementById("tabInputBtn").classList.toggle("active", tab === "input");
   document.getElementById("tabResultBtn").classList.toggle("active", tab === "result");
 }
@@ -612,7 +1260,7 @@ function showInput() {
 }
 
 function showResult() {
-  document.getElementById("inputView").style.display = "none";
+  hideAllCountryViews();
   document.getElementById("resultView").style.display = "block";
   setActiveTab("result");
 }
@@ -633,9 +1281,11 @@ async function init() {
     showInputMessage("err", COUNTRY_API_NOT_DEPLOYED_MSG.replace("YOUR_WEB_APP_URL", COUNTRY_SHAPE_API_URL));
   }
 
-  renderCountryList();
-  document.getElementById("playerName").addEventListener("change", handlePlayerSelection);
-  await refreshCountryShapeSession();
+  fillGuessPlayerSelect();
+  bindGuessEvents();
+  bindAdminEvents();
+  await refreshGuessSession();
+  showGuess();
 }
 
 init();

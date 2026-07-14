@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Country by Shape – A'Croatia 2026</title>
-  <link rel="stylesheet" href="css/style.css?v=42" />
+  <link rel="stylesheet" href="css/style.css?v=54" />
 </head>
 <body>
   <div class="wrap">
@@ -21,27 +21,38 @@
       </div>
 
       <div class="tabs">
+        <button id="tabGuessBtn" class="secondary active" onclick="showGuess()">Guess</button>
+        <button id="tabResultBtn" class="secondary" onclick="showResult()">Result</button>
         <button id="tabInputBtn" class="secondary" onclick="showInput()">Input</button>
-        <button id="tabResultBtn" class="secondary active" onclick="showResult()">Result</button>
       </div>
     </header>
 
+    <section id="guessView" class="card">
+      <h2>Guess the Country</h2>
+      <p class="small">Choose your name first. The active country is highlighted in yellow. Change your option while the timer runs. Your last choice is saved when the timer hits 0:00.</p>
+
+      <label for="guessPlayerName">Your Name</label>
+      <select id="guessPlayerName" autocomplete="off"></select>
+
+      <p id="guessActiveInfo" class="small country-guess-active-info">Open country: Country 1</p>
+
+      <div id="guessCountryList" class="country-guess-list"></div>
+
+      <button id="submitCountryGuessBtn" type="button" onclick="submitCountryGuess()" style="display:none" aria-hidden="true">Submit guess</button>
+      <div id="guessMessage" class="msg"></div>
+    </section>
+
     <section id="inputView" class="card" style="display:none">
-      <h2>Your Guess</h2>
-      <p class="small">Enter each player one by one. Already submitted players cannot be submitted again.</p>
+      <h2>Input</h2>
+      <p class="small">Per country: Start timer (30s). Players guess in parallel. After 30s enter the correct answer and Submit.</p>
+      <p id="adminStatus" class="small country-guess-active-info">Active country: Country 1 · 0/20 completed</p>
 
-      <label for="playerName">Player</label>
-      <select id="playerName" autocomplete="off"></select>
-
-      <div id="countryList" class="country-list"></div>
-
-      <div id="correctCounter" class="country-correct-counter">0/20 correct</div>
-      <button id="submitCountryResultBtn" type="button" onclick="submitCountryResult()">Submit result</button>
+      <div id="adminCountryList" class="country-guess-list"></div>
 
       <div id="inputMessage" class="msg"></div>
     </section>
 
-    <section id="resultView" class="card">
+    <section id="resultView" class="card" style="display:none">
       <h2>Results</h2>
       <p class="small">Overview of submitted guesses.</p>
       <button id="refreshResultBtn" onclick="loadCountryResults()">Refresh results</button>
@@ -68,6 +79,6 @@
     </div>
   </div>
 
-  <script src="js/country-by-shape.js?v=42"></script>
+  <script src="js/country-by-shape.js?v=54"></script>
 </body>
 </html>

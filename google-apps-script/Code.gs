@@ -9,19 +9,28 @@
 //
 // Version marker — after deploy, verify with:
 // ?action=apiInfo
-const API_VERSION = "2026-07-14-country-shape";
+const API_VERSION = "2026-07-14-country-shape-getrange-fix";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
 const SHEET_VOTERS = "Teilnehmer";
 const SHEET_BEST_EVER_SUBMITS = "BestEverSubmits";
 const SHEET_COUNTRY_SHAPE_SUBMITS = "CountryShapeSubmits";
+const SHEET_COUNTRY_SHAPE_GUESSES = "CountryShapeGuesses";
+const SHEET_COUNTRY_SHAPE_GUESS_STATE = "CountryShapeGuessState";
+const SHEET_COUNTRY_SHAPE_CORRECT = "CountryShapeCorrectAnswers";
 const SONG_ROW_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter"];
 const BEST_EVER_SUBMIT_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter", "Timestamp", "Event ID"];
 const COUNTRY_SHAPE_SUBMIT_HEADERS = ["Timestamp", "Event ID", "Voter", "Correct Countries"];
 const COUNTRY_SHAPE_COUNTRY_COUNT = 20;
 const COUNTRY_SHAPE_STORAGE_PREFIX = "countries:";
 const COUNTRY_SHAPE_LEGACY_PREFIX = "countries=";
+const COUNTRY_SHAPE_GUESS_HEADERS = ["Timestamp", "Event ID", "Voter", "Country", "Choice"];
+const COUNTRY_SHAPE_GUESS_STATE_HEADERS = ["Event ID", "Active Country", "Guessing Open", "Round Token"];
+const COUNTRY_SHAPE_CORRECT_HEADERS = ["Timestamp", "Event ID", "Country", "Correct Choice"];
+const COUNTRY_SHAPE_POINT_POOL = 20;
+const COUNTRY_SHAPE_GUESS_CHOICES = [1, 2, 3, 4];
+const COUNTRY_SHAPE_GUESS_WINDOW_SECONDS = 30;
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -108,8 +117,12 @@ function doGet(e) {
         "results",
         "bestEverSubmit",
         "bestEverCheck",
-        "countryShapeSubmit",
-        "countryShapeResults"
+        "countryShapeResults",
+        "countryShapeGuessState",
+        "countryShapeGuessSubmit",
+        "countryShapeAdminStartTimer",
+        "countryShapeAdminEndTimer",
+        "countryShapeAdminSubmitCorrect"
       ]
     }, e.parameter.callback);
   }
@@ -179,6 +192,73 @@ function doGet(e) {
     }
   }
 
+  if (action === "countryShapeGuessState") {
+    const voter = String(e.parameter.voter || "").trim();
+    return json_(getCountryShapeGuessState_(ss, eventId, voter), e.parameter.callback);
+  }
+
+  if (action === "countryShapeGuessSubmit") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const data = {
+        eventId: eventId,
+        voter: String(e.parameter.voter || "").trim(),
+        country: Number(e.parameter.country),
+        choice: Number(e.parameter.choice)
+      };
+      return json_(submitCountryShapeGuess_(ss, data), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === "countryShapeAdminStartTimer") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const country = Number(e.parameter.country);
+      return json_(startCountryShapeGuessTimer_(ss, eventId, country), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === "countryShapeAdminEndTimer") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const country = Number(e.parameter.country);
+      return json_(endCountryShapeGuessTimer_(ss, eventId, country), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === "countryShapeAdminSubmitCorrect") {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const country = Number(e.parameter.country);
+      const choice = Number(e.parameter.choice);
+      return json_(submitCountryShapeCorrectAnswer_(ss, eventId, country, choice), e.parameter.callback);
+    } catch (err) {
+      return json_({ ok: false, error: String(err) }, e.parameter.callback);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
   const votesSheet = ss.getSheetByName(SHEET_VOTES);
   const rows = votesSheet.getDataRange().getValues().slice(1).filter(r => r[1] === eventId);
 
@@ -232,6 +312,394 @@ function setupSheets_(ss) {
 
   setupBestEverSheets_(ss);
   setupCountryShapeSheets_(ss);
+  setupCountryShapeGuessSheets_(ss);
+}
+
+function setupCountryShapeGuessSheets_(ss) {
+  let guesses = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
+  if (!guesses) {
+    guesses = ss.insertSheet(SHEET_COUNTRY_SHAPE_GUESSES);
+    guesses.appendRow(COUNTRY_SHAPE_GUESS_HEADERS);
+    guesses.getRange(1, 1, 1, COUNTRY_SHAPE_GUESS_HEADERS.length).setFontWeight("bold");
+  }
+
+  let state = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESS_STATE);
+  if (!state) {
+    state = ss.insertSheet(SHEET_COUNTRY_SHAPE_GUESS_STATE);
+    state.appendRow(COUNTRY_SHAPE_GUESS_STATE_HEADERS);
+    state.getRange(1, 1, 1, COUNTRY_SHAPE_GUESS_STATE_HEADERS.length).setFontWeight("bold");
+  }
+
+  setupCountryShapeCorrectSheet_(ss);
+  normalizeCountryShapeGuessStateSheet_(ss);
+}
+
+function getSheetDataRange_(sheet, startRow, startCol, endRow, endCol) {
+  const numRows = endRow - startRow + 1;
+  const numCols = endCol - startCol + 1;
+  return sheet.getRange(startRow, startCol, numRows, numCols);
+}
+
+function normalizeCountryShapeGuessStateSheet_(ss) {
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESS_STATE);
+  if (!sheet) return;
+
+  sheet.getRange(1, 1, 1, COUNTRY_SHAPE_GUESS_STATE_HEADERS.length)
+    .setValues([COUNTRY_SHAPE_GUESS_STATE_HEADERS]);
+  sheet.getRange(1, 1, 1, COUNTRY_SHAPE_GUESS_STATE_HEADERS.length).setFontWeight("bold");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const rows = getSheetDataRange_(sheet, 2, 1, lastRow, 4).getValues();
+
+  rows.forEach((row, index) => {
+    const sheetRow = index + 2;
+    let activeCountry = Number(row[1]);
+    let guessingOpen = row[2];
+    let roundToken = row[3];
+
+    if (!Number.isInteger(activeCountry) || activeCountry < 1) {
+      activeCountry = 1;
+    }
+
+    if (guessingOpen instanceof Date) {
+      guessingOpen = "";
+    } else {
+      guessingOpen = String(guessingOpen || "").trim().toLowerCase() === "open" ? "open" : "";
+    }
+
+    if (!Number.isInteger(Number(roundToken)) || roundToken === "" || roundToken === null) {
+      if (Number.isInteger(Number(row[2])) && String(row[2]).trim() !== "open") {
+        roundToken = Number(row[2]);
+        guessingOpen = "";
+      } else {
+        roundToken = 0;
+      }
+    } else {
+      roundToken = Number(roundToken);
+    }
+
+    getSheetDataRange_(sheet, sheetRow, 1, sheetRow, 4).setValues([
+      [String(row[0] || "").trim(), activeCountry, guessingOpen, roundToken]
+    ]);
+  });
+
+  SpreadsheetApp.flush();
+}
+
+function getCountryShapeGuessStateSheet_(ss) {
+  setupCountryShapeGuessSheets_(ss);
+  return ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESS_STATE);
+}
+
+function setupCountryShapeCorrectSheet_(ss) {
+  let correct = ss.getSheetByName(SHEET_COUNTRY_SHAPE_CORRECT);
+  if (!correct) {
+    correct = ss.insertSheet(SHEET_COUNTRY_SHAPE_CORRECT);
+    correct.appendRow(COUNTRY_SHAPE_CORRECT_HEADERS);
+    correct.getRange(1, 1, 1, COUNTRY_SHAPE_CORRECT_HEADERS.length).setFontWeight("bold");
+  }
+}
+
+function findCountryShapeStateRowIndexes_(sheet, eventId) {
+  const rows = sheet.getDataRange().getValues();
+  const indexes = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim() === String(eventId).trim()) {
+      indexes.push(i + 1);
+    }
+  }
+
+  return indexes;
+}
+
+function getCountryShapeActiveState_(ss, eventId) {
+  const sheet = getCountryShapeGuessStateSheet_(ss);
+  const rows = sheet.getDataRange().getValues().slice(1);
+  const match = rows.find(row => String(row[0] || "").trim() === String(eventId).trim());
+
+  if (!match) {
+    return { activeCountry: 1, guessingOpen: false, roundToken: 0, initialized: false };
+  }
+
+  const country = Number(match[1]);
+  const guessingOpen = String(match[2] || "").trim().toLowerCase() === "open";
+  const roundToken = Number(match[3]) || 0;
+  const activeCountry = (!Number.isInteger(country) || country < 1) ? 1 : country;
+
+  return {
+    activeCountry: activeCountry,
+    guessingOpen: guessingOpen,
+    roundToken: roundToken,
+    initialized: true
+  };
+}
+
+function updateCountryShapeState_(ss, eventId, activeCountry, guessingOpen, roundToken) {
+  const sheet = getCountryShapeGuessStateSheet_(ss);
+  const openValue = guessingOpen ? "open" : "";
+  const tokenValue = Number(roundToken) || 0;
+  const indexes = findCountryShapeStateRowIndexes_(sheet, eventId);
+
+  if (indexes.length > 0) {
+    getSheetDataRange_(sheet, indexes[0], 2, indexes[0], 4).setValues([[activeCountry, openValue, tokenValue]]);
+
+    for (let i = indexes.length - 1; i >= 1; i--) {
+      sheet.deleteRow(indexes[i]);
+    }
+  } else {
+    sheet.appendRow([eventId, activeCountry, openValue, tokenValue]);
+  }
+
+  SpreadsheetApp.flush();
+}
+
+function getCountryShapeActiveCountry_(ss, eventId) {
+  return getCountryShapeActiveState_(ss, eventId).activeCountry;
+}
+
+function getCountryShapeCorrectAnswers_(ss, eventId) {
+  setupCountryShapeCorrectSheet_(ss);
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_CORRECT);
+  if (!sheet) return {};
+
+  const answers = {};
+  sheet.getDataRange().getValues().slice(1).forEach(row => {
+    if (String(row[1] || "").trim() !== String(eventId).trim()) return;
+
+    const country = Number(row[2]);
+    const choice = Number(row[3]);
+    if (Number.isInteger(country) && country >= 1 && country <= COUNTRY_SHAPE_COUNTRY_COUNT &&
+        COUNTRY_SHAPE_GUESS_CHOICES.indexOf(choice) >= 0) {
+      answers[String(country)] = choice;
+    }
+  });
+
+  return answers;
+}
+
+function hasCountryShapeCorrectAnswer_(ss, eventId, country) {
+  return !!getCountryShapeCorrectAnswers_(ss, eventId)[String(country)];
+}
+
+function startCountryShapeGuessTimer_(ss, eventId, country) {
+  if (!Number.isInteger(country) || country < 1 || country > COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return { ok: false, error: "Invalid country." };
+  }
+
+  const state = getCountryShapeActiveState_(ss, eventId);
+  if (country !== state.activeCountry) {
+    return { ok: false, error: "Only the active country can start the timer." };
+  }
+
+  if (hasCountryShapeCorrectAnswer_(ss, eventId, country)) {
+    return { ok: false, error: "The correct answer for this country is already saved." };
+  }
+
+  if (state.guessingOpen) {
+    return { ok: false, error: "Guessing is already open for this country." };
+  }
+
+  const newToken = state.roundToken + 1;
+  updateCountryShapeState_(ss, eventId, country, true, newToken);
+  const updated = getCountryShapeActiveState_(ss, eventId);
+
+  return {
+    ok: true,
+    action: "countryShapeAdminStartTimer",
+    activeCountry: country,
+    guessingOpen: true,
+    roundToken: updated.roundToken,
+    guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS
+  };
+}
+
+function endCountryShapeGuessTimer_(ss, eventId, country) {
+  if (!Number.isInteger(country) || country < 1 || country > COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return { ok: false, error: "Invalid country." };
+  }
+
+  const state = getCountryShapeActiveState_(ss, eventId);
+  if (country !== state.activeCountry) {
+    return { ok: false, error: "Only the active country can end guessing." };
+  }
+
+  if (!state.guessingOpen) {
+    return { ok: false, error: "Guessing is not open." };
+  }
+
+  updateCountryShapeState_(ss, eventId, country, false, state.roundToken);
+  const updated = getCountryShapeActiveState_(ss, eventId);
+
+  return {
+    ok: true,
+    action: "countryShapeAdminEndTimer",
+    activeCountry: country,
+    guessingOpen: false,
+    roundToken: updated.roundToken,
+    guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS
+  };
+}
+
+function submitCountryShapeCorrectAnswer_(ss, eventId, country, choice) {
+  setupCountryShapeCorrectSheet_(ss);
+
+  if (!Number.isInteger(country) || country < 1 || country > COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return { ok: false, error: "Invalid country." };
+  }
+
+  if (COUNTRY_SHAPE_GUESS_CHOICES.indexOf(choice) < 0) {
+    return { ok: false, error: "Invalid choice." };
+  }
+
+  const state = getCountryShapeActiveState_(ss, eventId);
+  if (country !== state.activeCountry) {
+    return { ok: false, error: "Only the active country can be submitted." };
+  }
+
+  if (hasCountryShapeCorrectAnswer_(ss, eventId, country)) {
+    return { ok: false, error: "The correct answer for this country is already saved." };
+  }
+
+  const correctSheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_CORRECT);
+  correctSheet.appendRow([new Date(), eventId, country, choice]);
+  SpreadsheetApp.flush();
+
+  const nextCountry = country + 1;
+  const gameComplete = nextCountry > COUNTRY_SHAPE_COUNTRY_COUNT;
+  updateCountryShapeState_(ss, eventId, gameComplete ? COUNTRY_SHAPE_COUNTRY_COUNT + 1 : nextCountry, false, state.roundToken);
+
+  const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
+  const newActive = getCountryShapeActiveState_(ss, eventId);
+
+  return {
+    ok: true,
+    action: "countryShapeAdminSubmitCorrect",
+    country: country,
+    choice: choice,
+    activeCountry: newActive.activeCountry,
+    countriesCompleted: Object.keys(correctAnswers).length,
+    gameComplete: gameComplete
+  };
+}
+
+function getCountryShapeGuessRows_(ss, eventId) {
+  setupCountryShapeGuessSheets_(ss);
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
+  if (!sheet) return [];
+
+  return sheet.getDataRange().getValues().slice(1)
+    .filter(row => String(row[1] || "").trim() === String(eventId).trim())
+    .map(row => ({
+      voter: String(row[2] || "").trim(),
+      country: Number(row[3]),
+      choice: Number(row[4])
+    }))
+    .filter(entry => entry.voter && Number.isInteger(entry.country) && COUNTRY_SHAPE_GUESS_CHOICES.indexOf(entry.choice) >= 0);
+}
+
+function hasCountryShapeGuess_(ss, eventId, voter, country) {
+  const voterKey = normalizeCountryShapeVoterKey_(voter);
+  return getCountryShapeGuessRows_(ss, eventId).some(entry =>
+    normalizeCountryShapeVoterKey_(entry.voter) === voterKey &&
+    entry.country === country
+  );
+}
+
+function getCountryShapeGuessesForVoter_(ss, eventId, voter) {
+  const voterKey = normalizeCountryShapeVoterKey_(voter);
+  const guesses = {};
+
+  getCountryShapeGuessRows_(ss, eventId).forEach(entry => {
+    if (normalizeCountryShapeVoterKey_(entry.voter) !== voterKey) return;
+    guesses[String(entry.country)] = entry.choice;
+  });
+
+  return guesses;
+}
+
+function submitCountryShapeGuess_(ss, data) {
+  setupCountryShapeGuessSheets_(ss);
+
+  if (!data.eventId || !data.voter || !Number.isInteger(data.country) || !Number.isInteger(data.choice)) {
+    return { ok: false, error: "Invalid Country by Shape guess payload." };
+  }
+
+  const validVoters = getVoters_(ss);
+  if (!validVoters.includes(data.voter)) {
+    return { ok: false, error: "Unknown voter" };
+  }
+
+  if (data.country < 1 || data.country > COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return { ok: false, error: "Invalid country." };
+  }
+
+  if (COUNTRY_SHAPE_GUESS_CHOICES.indexOf(data.choice) < 0) {
+    return { ok: false, error: "Invalid choice." };
+  }
+
+  const activeState = getCountryShapeActiveState_(ss, data.eventId);
+  if (data.country !== activeState.activeCountry) {
+    return { ok: false, error: "This country is not open for guessing yet." };
+  }
+
+  if (activeState.activeCountry > COUNTRY_SHAPE_COUNTRY_COUNT) {
+    return { ok: false, error: "All countries are complete." };
+  }
+
+  if (hasCountryShapeCorrectAnswer_(ss, data.eventId, data.country)) {
+    return { ok: false, error: "This country round is already closed." };
+  }
+
+  if (hasCountryShapeGuess_(ss, data.eventId, data.voter, data.country)) {
+    return { ok: false, error: "This voter has already submitted a guess for this country." };
+  }
+
+  const guessesSheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
+  guessesSheet.appendRow([new Date(), data.eventId, data.voter, data.country, data.choice]);
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    action: "countryShapeGuessSubmit",
+    country: data.country,
+    choice: data.choice
+  };
+}
+
+function getCountryShapeGuessState_(ss, eventId, voter) {
+  setupCountryShapeGuessSheets_(ss);
+
+  const activeState = getCountryShapeActiveState_(ss, eventId);
+  const activeCountry = activeState.activeCountry;
+  const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
+  const countriesCompleted = Object.keys(correctAnswers).length;
+  const gameComplete = countriesCompleted >= COUNTRY_SHAPE_COUNTRY_COUNT;
+  const allGuesses = getCountryShapeGuessRows_(ss, eventId);
+  const guessedForActive = allGuesses
+    .filter(entry => entry.country === activeCountry)
+    .map(entry => entry.voter)
+    .sort((a, b) => a.localeCompare(b, "de"));
+  const totalPlayers = getVoters_(ss).length;
+  const userGuesses = voter ? getCountryShapeGuessesForVoter_(ss, eventId, voter) : {};
+
+  return {
+    ok: true,
+    action: "countryShapeGuessState",
+    activeCountry: activeCountry,
+    guessingOpen: activeState.guessingOpen,
+    roundToken: activeState.roundToken,
+    guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS,
+    totalPlayers: totalPlayers,
+    guessCount: guessedForActive.length,
+    guessedForActive: guessedForActive,
+    userGuesses: userGuesses,
+    correctAnswers: correctAnswers,
+    countriesCompleted: countriesCompleted,
+    gameComplete: gameComplete
+  };
 }
 
 function setupCountryShapeSheets_(ss) {
@@ -395,17 +863,62 @@ function submitCountryShape_(ss, data) {
 }
 
 function getCountryShapeResults_(ss, eventId) {
-  const submissions = getCountryShapeSubmissions_(ss, eventId);
-  const submittedVoters = submissions
-    .map(entry => entry.voter)
-    .sort((a, b) => a.localeCompare(b, "de"));
+  setupCountryShapeGuessSheets_(ss);
+  setupCountryShapeCorrectSheet_(ss);
+
+  const allGuesses = getCountryShapeGuessRows_(ss, eventId);
+  const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
+  const allPlayers = getVoters_(ss);
+  const correctCounts = {};
+  const playerCorrectCountries = {};
+
+  allPlayers.forEach(playerName => {
+    playerCorrectCountries[playerName] = [];
+  });
+
+  for (let country = 1; country <= COUNTRY_SHAPE_COUNTRY_COUNT; country++) {
+    const correctChoice = correctAnswers[String(country)];
+    if (!correctChoice) continue;
+
+    let count = 0;
+    allGuesses.forEach(entry => {
+      if (entry.country !== country || entry.choice !== correctChoice) return;
+      count++;
+      if (playerCorrectCountries[entry.voter]) {
+        playerCorrectCountries[entry.voter].push(country);
+      }
+    });
+    correctCounts[country] = count;
+  }
+
+  const countriesCompleted = Object.keys(correctAnswers).length;
+
+  const rankings = allPlayers.map(playerName => {
+    let points = 0;
+    const correctCountries = playerCorrectCountries[playerName] || [];
+
+    correctCountries.forEach(country => {
+      const count = correctCounts[country] || 0;
+      if (count > 0) {
+        points += COUNTRY_SHAPE_POINT_POOL / count;
+      }
+    });
+
+    return {
+      playerName: playerName,
+      points: points,
+      correctCount: correctCountries.length,
+      guessedCount: allGuesses.filter(entry => entry.voter === playerName).length
+    };
+  }).sort((a, b) => b.points - a.points || a.playerName.localeCompare(b, "de"));
 
   return {
     ok: true,
     action: "countryShapeResults",
-    submitCount: submittedVoters.length,
-    submittedVoters: submittedVoters,
-    submissions: submissions
+    countriesCompleted: countriesCompleted,
+    countryCount: COUNTRY_SHAPE_COUNTRY_COUNT,
+    pointPool: COUNTRY_SHAPE_POINT_POOL,
+    rankings: rankings
   };
 }
 

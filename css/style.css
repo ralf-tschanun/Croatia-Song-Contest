@@ -425,3 +425,166 @@ footer a:hover{text-decoration:underline}
 .country-password-modal .modal-actions{
   margin-top:16px;
 }
+
+.country-guess-active-info{
+  margin-top:12px;
+  color:var(--accent);
+  font-weight:700;
+}
+
+.country-guess-list{
+  display:grid;
+  gap:10px;
+  margin-top:16px;
+}
+
+.country-guess-row{
+  padding:12px;
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+  border-radius:12px;
+}
+
+.country-guess-row-waiting,
+.country-guess-row-active,
+.country-guess-row-up-next{
+  border:2px solid rgba(255,207,90,.9);
+  box-shadow:0 0 0 2px rgba(255,207,90,.22);
+  background:rgba(255,207,90,.07);
+}
+
+.country-guess-row-active{
+  border-color:rgba(255,207,90,1);
+}
+
+.country-guess-row-up-next{
+  border-style:dashed;
+}
+
+.country-guess-row-done{
+  opacity:.88;
+}
+
+.country-guess-row-locked,
+.country-guess-row-missed{
+  opacity:.55;
+}
+
+.country-guess-row-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:10px;
+}
+
+.country-guess-status-wrap{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.country-guess-countdown{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:52px;
+  padding:4px 8px;
+  border-radius:999px;
+  background:rgba(255,207,90,.14);
+  border:1px solid rgba(255,207,90,.35);
+  color:var(--accent);
+  font-size:14px;
+  font-weight:900;
+  line-height:1;
+}
+
+.country-guess-status{
+  color:var(--muted);
+  font-size:13px;
+  font-weight:600;
+}
+
+.country-guess-options{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:8px;
+}
+
+.country-guess-option-label{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  margin:0;
+  padding:10px 8px;
+  background:rgba(255,255,255,.04);
+  border:1px solid var(--border);
+  border-radius:10px;
+  color:var(--text);
+  font-weight:700;
+  cursor:pointer;
+}
+
+.country-guess-option-label input{
+  width:auto;
+  margin:0;
+  padding:0;
+  accent-color:var(--accent);
+}
+
+.country-guess-option-label input:disabled{
+  cursor:not-allowed;
+}
+
+.country-input-section{
+  margin-top:18px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+}
+
+.country-input-section:first-of-type{
+  margin-top:0;
+  padding-top:0;
+  border-top:0;
+}
+
+.country-input-heading{
+  margin:0 0 6px;
+  font-size:18px;
+  color:var(--accent);
+}
+
+.country-guess-row-closed{
+  opacity:.72;
+}
+
+.country-admin-actions{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+  flex-wrap:wrap;
+}
+
+.country-admin-actions button{
+  margin-top:0;
+}
+
+.country-admin-actions button.secondary{
+  flex:0 0 auto;
+}
+
+.country-admin-saved-choice{
+  font-size:13px;
+  color:var(--muted);
+}
+
+#submitCountryGuessBtn{
+  margin-top:12px;
+}
+
+@media(max-width:560px){
+  .country-guess-options{
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+  }
+}
