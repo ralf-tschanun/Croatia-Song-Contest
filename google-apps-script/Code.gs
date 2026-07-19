@@ -9,7 +9,7 @@
 //
 // Version marker — after deploy, verify with:
 // ?action=apiInfo
-const API_VERSION = "2026-07-19-country-shape-10pt-per-country";
+const API_VERSION = "2026-07-20-country-shape-shared-10pt";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
@@ -25,7 +25,6 @@ const COUNTRY_SHAPE_GUESS_HEADERS = ["Timestamp", "Event ID", "Voter", "Country"
 const COUNTRY_SHAPE_GUESS_STATE_HEADERS = ["Event ID", "Active Country", "Guessing Open", "Round Token", "Ends At"];
 const COUNTRY_SHAPE_CORRECT_HEADERS = ["Timestamp", "Event ID", "Country", "Correct Choice"];
 const COUNTRY_SHAPE_POINT_POOL = 10;
-const COUNTRY_SHAPE_POINT_DIVISOR = 10;
 const COUNTRY_SHAPE_GUESS_CHOICES = [1, 2, 3, 4];
 const COUNTRY_SHAPE_GUESS_WINDOW_SECONDS = 15;
 
@@ -968,6 +967,7 @@ function getCountryShapeResults_(ss, eventId) {
   const allGuesses = getCountryShapeGuessRows_(ss, eventId);
   const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
   const allPlayers = getVoters_(ss);
+  const correctCounts = {};
   const playerCorrectCountries = {};
   const playerByKey = {};
 
@@ -980,13 +980,16 @@ function getCountryShapeResults_(ss, eventId) {
     const correctChoice = correctAnswers[String(country)];
     if (!correctChoice) continue;
 
+    let count = 0;
     allGuesses.forEach(entry => {
       if (entry.country !== country || entry.choice !== correctChoice) return;
+      count++;
       const canonical = playerByKey[normalizeCountryShapeVoterKey_(entry.voter)];
       if (canonical) {
         playerCorrectCountries[canonical].push(country);
       }
     });
+    correctCounts[country] = count;
   }
 
   const countriesCompleted = Object.keys(correctAnswers).length;
@@ -996,9 +999,12 @@ function getCountryShapeResults_(ss, eventId) {
     const correctCountries = playerCorrectCountries[playerName] || [];
     const playerKey = normalizeCountryShapeVoterKey_(playerName);
 
-    correctCountries.forEach(() => {
-      // Fixed split: max pool / 10 users (1 point per correct country).
-      points += COUNTRY_SHAPE_POINT_POOL / COUNTRY_SHAPE_POINT_DIVISOR;
+    correctCountries.forEach(country => {
+      const count = correctCounts[country] || 0;
+      if (count > 0) {
+        // 10 points shared among everyone who guessed this country correctly.
+        points += COUNTRY_SHAPE_POINT_POOL / count;
+      }
     });
 
     return {
@@ -1017,7 +1023,6 @@ function getCountryShapeResults_(ss, eventId) {
     countriesCompleted: countriesCompleted,
     countryCount: COUNTRY_SHAPE_COUNTRY_COUNT,
     pointPool: COUNTRY_SHAPE_POINT_POOL,
-    pointDivisor: COUNTRY_SHAPE_POINT_DIVISOR,
     totalGuesses: allGuesses.length,
     rankings: rankings
   };

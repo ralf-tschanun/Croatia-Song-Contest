@@ -6,7 +6,6 @@ let COUNTRY_SHAPE_PLAYERS = [];
 
 const COUNTRY_COUNT = 20;
 const COUNTRY_POINT_POOL = 10;
-const COUNTRY_POINT_DIVISOR = 10;
 const REFRESH_COUNTRY_RESULTS_LABEL = "Refresh results";
 const REFRESH_COUNTRY_RESULTS_LOADING_LABEL = "⏳ loading...";
 
@@ -1593,8 +1592,6 @@ function renderCountryResults(data) {
   const countriesCompleted = Number(data.countriesCompleted) || 0;
   const countryCount = Number(data.countryCount) || COUNTRY_COUNT;
   const pointPool = Number(data.pointPool) || COUNTRY_POINT_POOL;
-  const pointDivisor = Number(data.pointDivisor) || COUNTRY_POINT_DIVISOR;
-  const pointsPerCorrect = pointPool / pointDivisor;
   const totalGuesses = Number(data.totalGuesses) || rankings.reduce((sum, entry) => sum + (Number(entry.guessedCount) || 0), 0);
   const maxPoints = Math.max(1, ...rankings.map(entry => entry.points || 0));
 
@@ -1614,8 +1611,8 @@ function renderCountryResults(data) {
       </div>
       <div class="stat">
         <div class="stat-inline">
-          <b>${formatCountryPoints(pointsPerCorrect)}</b>
-          <span class="stat-label">Points per correct (${pointPool} ÷ ${pointDivisor})</span>
+          <b>${pointPool}</b>
+          <span class="stat-label">Points per country (shared by correct guessers)</span>
         </div>
       </div>
     </div>
