@@ -5,7 +5,8 @@ const COUNTRY_SHAPE_EVENT_ID = "country-by-shape-2026";
 let COUNTRY_SHAPE_PLAYERS = [];
 
 const COUNTRY_COUNT = 20;
-const COUNTRY_POINT_POOL = 20;
+const COUNTRY_POINT_POOL = 10;
+const COUNTRY_POINT_DIVISOR = 10;
 const REFRESH_COUNTRY_RESULTS_LABEL = "Refresh results";
 const REFRESH_COUNTRY_RESULTS_LOADING_LABEL = "⏳ loading...";
 
@@ -304,38 +305,52 @@ function fillGuessPlayerSelect() {
   const sel = document.getElementById("guessPlayerName");
   if (!sel) return;
 
-  const storedVoter = getStoredGuessVoter();
   sel.innerHTML =
     '<option value="">Please select your name</option>' +
     COUNTRY_SHAPE_PLAYERS.map(name =>
       `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
     ).join("");
 
-  if (storedVoter && COUNTRY_SHAPE_PLAYERS.includes(storedVoter)) {
-    sel.value = storedVoter;
-    const hasServerGuess = Object.keys(COUNTRY_GUESS_STATE.userGuesses || {}).length > 0;
-    if (hasServerGuess) {
-      lockGuessPlayerSelect();
-    } else {
-      sel.disabled = false;
-    }
-  } else {
-    sel.disabled = false;
-    sel.selectedIndex = 0;
+  if (applyLoggedInVoterToSelect("guessPlayerName", COUNTRY_SHAPE_PLAYERS)) {
+    return;
   }
+
+  sel.disabled = false;
+  sel.selectedIndex = 0;
 }
 
 function getStoredGuessVoter() {
+  if (typeof getLoggedInVoter === "function") {
+    const loggedIn = getLoggedInVoter();
+    if (loggedIn) return loggedIn;
+  }
   return String(sessionStorage.getItem(storageKeyCountryGuessVoter) || "").trim();
 }
 
 function storeGuessVoter(voter) {
-  sessionStorage.setItem(storageKeyCountryGuessVoter, String(voter || "").trim());
+  const name = String(voter || "").trim();
+  if (!name) return;
+  if (typeof setLoggedInVoter === "function" && !hasLoggedInVoter()) {
+    // Guesses should only happen after confirmed login; keep a session fallback.
+    sessionStorage.setItem(storageKeyCountryGuessVoter, name);
+    return;
+  }
+  if (typeof setLoggedInVoter === "function") {
+    setLoggedInVoter(name);
+  } else {
+    sessionStorage.setItem(storageKeyCountryGuessVoter, name);
+  }
 }
 
 function lockGuessPlayerSelect() {
   const sel = document.getElementById("guessPlayerName");
   if (sel) sel.disabled = true;
+}
+
+function unlockGuessPlayerSelect() {
+  if (typeof hasLoggedInVoter === "function" && hasLoggedInVoter()) return;
+  const sel = document.getElementById("guessPlayerName");
+  if (sel) sel.disabled = false;
 }
 
 function showGuessMessage(type, text) {
@@ -1534,13 +1549,15 @@ function bindAdminEvents() {
 }
 
 function bindGuessEvents() {
-  const playerSel = document.getElementById("guessPlayerName");
-  if (playerSel) {
-    playerSel.addEventListener("change", async () => {
+  bindLoginSelect("guessPlayerName", {
+    onLocked: async () => {
       hideGuessMessage();
+      storeGuessVoter(getLoggedInVoter());
       await refreshGuessSession();
-    });
-  }
+      fillGuessPlayerSelect();
+      updateGuessSubmitButtonState();
+    }
+  });
 
   const list = document.getElementById("guessCountryList");
   if (list) {
@@ -1576,6 +1593,9 @@ function renderCountryResults(data) {
   const countriesCompleted = Number(data.countriesCompleted) || 0;
   const countryCount = Number(data.countryCount) || COUNTRY_COUNT;
   const pointPool = Number(data.pointPool) || COUNTRY_POINT_POOL;
+  const pointDivisor = Number(data.pointDivisor) || COUNTRY_POINT_DIVISOR;
+  const pointsPerCorrect = pointPool / pointDivisor;
+  const totalGuesses = Number(data.totalGuesses) || rankings.reduce((sum, entry) => sum + (Number(entry.guessedCount) || 0), 0);
   const maxPoints = Math.max(1, ...rankings.map(entry => entry.points || 0));
 
   container.innerHTML = `
@@ -1588,8 +1608,14 @@ function renderCountryResults(data) {
       </div>
       <div class="stat">
         <div class="stat-inline">
-          <b>${pointPool}</b>
-          <span class="stat-label">Points per country (shared)</span>
+          <b>${totalGuesses}</b>
+          <span class="stat-label">Guesses submitted</span>
+        </div>
+      </div>
+      <div class="stat">
+        <div class="stat-inline">
+          <b>${formatCountryPoints(pointsPerCorrect)}</b>
+          <span class="stat-label">Points per correct (${pointPool} ÷ ${pointDivisor})</span>
         </div>
       </div>
     </div>
@@ -1685,6 +1711,7 @@ function showResult() {
   hideAllCountryViews();
   document.getElementById("resultView").style.display = "block";
   setActiveTab("result");
+  loadCountryResults();
 }
 
 async function init() {
@@ -1699,6 +1726,7 @@ async function init() {
   clearLegacyLocalGameStorage();
 
   if (new URLSearchParams(location.search).get("reset") === "1") {
+    if (typeof clearLoggedInVoter === "function") clearLoggedInVoter();
     clearGameSession();
     history.replaceState({}, "", location.pathname);
   }

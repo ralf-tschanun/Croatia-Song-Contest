@@ -9,7 +9,7 @@
 //
 // Version marker — after deploy, verify with:
 // ?action=apiInfo
-const API_VERSION = "2026-07-19-country-shape-absolute-ends-at";
+const API_VERSION = "2026-07-19-country-shape-10pt-per-country";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
@@ -24,7 +24,8 @@ const COUNTRY_SHAPE_COUNTRY_COUNT = 20;
 const COUNTRY_SHAPE_GUESS_HEADERS = ["Timestamp", "Event ID", "Voter", "Country", "Choice"];
 const COUNTRY_SHAPE_GUESS_STATE_HEADERS = ["Event ID", "Active Country", "Guessing Open", "Round Token", "Ends At"];
 const COUNTRY_SHAPE_CORRECT_HEADERS = ["Timestamp", "Event ID", "Country", "Correct Choice"];
-const COUNTRY_SHAPE_POINT_POOL = 20;
+const COUNTRY_SHAPE_POINT_POOL = 10;
+const COUNTRY_SHAPE_POINT_DIVISOR = 10;
 const COUNTRY_SHAPE_GUESS_CHOICES = [1, 2, 3, 4];
 const COUNTRY_SHAPE_GUESS_WINDOW_SECONDS = 15;
 
@@ -321,9 +322,8 @@ function setupCountryShapeGuessSheets_(ss) {
   let guesses = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
   if (!guesses) {
     guesses = ss.insertSheet(SHEET_COUNTRY_SHAPE_GUESSES);
-    guesses.appendRow(COUNTRY_SHAPE_GUESS_HEADERS);
-    guesses.getRange(1, 1, 1, COUNTRY_SHAPE_GUESS_HEADERS.length).setFontWeight("bold");
   }
+  ensureCountryShapeSheetHeaders_(guesses, COUNTRY_SHAPE_GUESS_HEADERS, isCountryShapeGuessHeaderRow_);
 
   let state = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESS_STATE);
   if (!state) {
@@ -333,6 +333,38 @@ function setupCountryShapeGuessSheets_(ss) {
   }
 
   setupCountryShapeCorrectSheet_(ss);
+}
+
+function isCountryShapeGuessHeaderRow_(row) {
+  const col0 = String(row[0] || "").trim().toLowerCase();
+  const col1 = String(row[1] || "").trim().toLowerCase();
+  const col2 = String(row[2] || "").trim().toLowerCase();
+  return col0 === "timestamp" || col1 === "event id" || col2 === "voter";
+}
+
+function isCountryShapeCorrectHeaderRow_(row) {
+  const col0 = String(row[0] || "").trim().toLowerCase();
+  const col1 = String(row[1] || "").trim().toLowerCase();
+  const col2 = String(row[2] || "").trim().toLowerCase();
+  return col0 === "timestamp" || col1 === "event id" || col2 === "country";
+}
+
+function ensureCountryShapeSheetHeaders_(sheet, headers, isHeaderRowFn) {
+  if (!sheet) return;
+
+  if (sheet.getLastRow() < 1) {
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
+    return;
+  }
+
+  const firstRow = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  if (isHeaderRowFn(firstRow)) return;
+
+  // Sheet has data but no header — insert header so the first guess/answer is no longer skipped.
+  sheet.insertRowBefore(1);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
 }
 
 function countryShapeGuessStateNeedsNormalization_(sheet) {
@@ -449,9 +481,8 @@ function setupCountryShapeCorrectSheet_(ss) {
   let correct = ss.getSheetByName(SHEET_COUNTRY_SHAPE_CORRECT);
   if (!correct) {
     correct = ss.insertSheet(SHEET_COUNTRY_SHAPE_CORRECT);
-    correct.appendRow(COUNTRY_SHAPE_CORRECT_HEADERS);
-    correct.getRange(1, 1, 1, COUNTRY_SHAPE_CORRECT_HEADERS.length).setFontWeight("bold");
   }
+  ensureCountryShapeSheetHeaders_(correct, COUNTRY_SHAPE_CORRECT_HEADERS, isCountryShapeCorrectHeaderRow_);
 }
 
 function findCountryShapeStateRowIndexes_(sheet, eventId) {
@@ -608,11 +639,12 @@ function getCountryShapeCorrectAnswers_(ss, eventId) {
   if (!sheet) return {};
 
   const answers = {};
-  sheet.getDataRange().getValues().slice(1).forEach(row => {
-    if (String(row[1] || "").trim() !== String(eventId).trim()) return;
+  const eventKey = String(eventId || "").trim();
+  getCountryShapeSheetDataRows_(sheet, isCountryShapeCorrectHeaderRow_).forEach(row => {
+    if (String(row[1] || "").trim() !== eventKey) return;
 
-    const country = Number(row[2]);
-    const choice = Number(row[3]);
+    const country = toCountryShapeInt_(row[2]);
+    const choice = toCountryShapeInt_(row[3]);
     if (Number.isInteger(country) && country >= 1 && country <= COUNTRY_SHAPE_COUNTRY_COUNT &&
         COUNTRY_SHAPE_GUESS_CHOICES.indexOf(choice) >= 0) {
       answers[String(country)] = choice;
@@ -736,19 +768,47 @@ function submitCountryShapeCorrectAnswer_(ss, eventId, country, choice) {
   };
 }
 
+function getCountryShapeSheetDataRows_(sheet, isHeaderRowFn) {
+  if (!sheet || sheet.getLastRow() < 1) return [];
+
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) return [];
+
+  // If row 1 is a real header, skip it. If headers were deleted, keep row 1 as data.
+  if (isHeaderRowFn(values[0])) {
+    return values.slice(1);
+  }
+  return values;
+}
+
+function toCountryShapeInt_(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return NaN;
+  const rounded = Math.round(n);
+  return Math.abs(n - rounded) < 1e-9 ? rounded : NaN;
+}
+
 function getCountryShapeGuessRows_(ss, eventId) {
   setupCountryShapeGuessSheets_(ss);
   const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
   if (!sheet) return [];
 
-  return sheet.getDataRange().getValues().slice(1)
-    .filter(row => String(row[1] || "").trim() === String(eventId).trim())
+  const eventKey = String(eventId || "").trim();
+
+  return getCountryShapeSheetDataRows_(sheet, isCountryShapeGuessHeaderRow_)
+    .filter(row => String(row[1] || "").trim() === eventKey)
     .map(row => ({
       voter: String(row[2] || "").trim(),
-      country: Number(row[3]),
-      choice: Number(row[4])
+      country: toCountryShapeInt_(row[3]),
+      choice: toCountryShapeInt_(row[4])
     }))
-    .filter(entry => entry.voter && Number.isInteger(entry.country) && COUNTRY_SHAPE_GUESS_CHOICES.indexOf(entry.choice) >= 0);
+    .filter(entry =>
+      entry.voter &&
+      Number.isInteger(entry.country) &&
+      entry.country >= 1 &&
+      entry.country <= COUNTRY_SHAPE_COUNTRY_COUNT &&
+      COUNTRY_SHAPE_GUESS_CHOICES.indexOf(entry.choice) >= 0
+    );
 }
 
 function hasCountryShapeGuess_(ss, eventId, voter, country) {
@@ -908,26 +968,25 @@ function getCountryShapeResults_(ss, eventId) {
   const allGuesses = getCountryShapeGuessRows_(ss, eventId);
   const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
   const allPlayers = getVoters_(ss);
-  const correctCounts = {};
   const playerCorrectCountries = {};
+  const playerByKey = {};
 
   allPlayers.forEach(playerName => {
     playerCorrectCountries[playerName] = [];
+    playerByKey[normalizeCountryShapeVoterKey_(playerName)] = playerName;
   });
 
   for (let country = 1; country <= COUNTRY_SHAPE_COUNTRY_COUNT; country++) {
     const correctChoice = correctAnswers[String(country)];
     if (!correctChoice) continue;
 
-    let count = 0;
     allGuesses.forEach(entry => {
       if (entry.country !== country || entry.choice !== correctChoice) return;
-      count++;
-      if (playerCorrectCountries[entry.voter]) {
-        playerCorrectCountries[entry.voter].push(country);
+      const canonical = playerByKey[normalizeCountryShapeVoterKey_(entry.voter)];
+      if (canonical) {
+        playerCorrectCountries[canonical].push(country);
       }
     });
-    correctCounts[country] = count;
   }
 
   const countriesCompleted = Object.keys(correctAnswers).length;
@@ -935,21 +994,22 @@ function getCountryShapeResults_(ss, eventId) {
   const rankings = allPlayers.map(playerName => {
     let points = 0;
     const correctCountries = playerCorrectCountries[playerName] || [];
+    const playerKey = normalizeCountryShapeVoterKey_(playerName);
 
-    correctCountries.forEach(country => {
-      const count = correctCounts[country] || 0;
-      if (count > 0) {
-        points += COUNTRY_SHAPE_POINT_POOL / count;
-      }
+    correctCountries.forEach(() => {
+      // Fixed split: max pool / 10 users (1 point per correct country).
+      points += COUNTRY_SHAPE_POINT_POOL / COUNTRY_SHAPE_POINT_DIVISOR;
     });
 
     return {
       playerName: playerName,
       points: points,
       correctCount: correctCountries.length,
-      guessedCount: allGuesses.filter(entry => entry.voter === playerName).length
+      guessedCount: allGuesses.filter(entry =>
+        normalizeCountryShapeVoterKey_(entry.voter) === playerKey
+      ).length
     };
-  }).sort((a, b) => b.points - a.points || a.playerName.localeCompare(b, "de"));
+  }).sort((a, b) => b.points - a.points || a.playerName.localeCompare(b.playerName, "de"));
 
   return {
     ok: true,
@@ -957,6 +1017,8 @@ function getCountryShapeResults_(ss, eventId) {
     countriesCompleted: countriesCompleted,
     countryCount: COUNTRY_SHAPE_COUNTRY_COUNT,
     pointPool: COUNTRY_SHAPE_POINT_POOL,
+    pointDivisor: COUNTRY_SHAPE_POINT_DIVISOR,
+    totalGuesses: allGuesses.length,
     rankings: rankings
   };
 }

@@ -10,6 +10,7 @@ async function init() {
   const shouldResetBrowserVote = new URLSearchParams(location.search).get("reset") === "1";
 
   if (shouldResetBrowserVote) {
+    clearLoggedInVoter();
     localStorage.removeItem(storageKeyFinal);
     localStorage.removeItem(storageKeyVote);
     localStorage.removeItem(storageKeyBestEverFinal);
@@ -22,9 +23,11 @@ async function init() {
   document.querySelectorAll("select").forEach(s => {
     if (s.id !== "voterName") s.addEventListener("change", validateChoices);
   });
-  document.getElementById("voterName").addEventListener("change", () => {
-    handleVoterSelection();
-    onVoterChangedForBestEver();
+  bindLoginSelect("voterName", {
+    onLocked: () => {
+      handleVoterSelection();
+      onVoterChangedForBestEver();
+    }
   });
   bindBestEverEvents();
   renderSongList();
@@ -33,7 +36,7 @@ async function init() {
   await refreshBestEverSession();
 
   if (shouldResetBrowserVote) {
-    showMsg("ok", "Browser voting data cleared. Please choose your name.");
+    showMsg("ok", "Login and browser data cleared. Please choose your name.");
   }
 }
 
@@ -85,9 +88,10 @@ function normalizeVoterName(name) {
   return String(name || "").trim().toLowerCase();
 }
 
-const BROWSER_LOCKED_MSG = "This browser is locked to your selected name. Reset browser voting data at the bottom of the page to switch users.";
+const BROWSER_LOCKED_MSG = "This browser is locked to your selected name. Use Reset login / browser data to switch users.";
 
 function getLockedBrowserVoter() {
+  if (typeof hasLoggedInVoter === "function" && hasLoggedInVoter()) return getLoggedInVoter();
   if (hasLocalFinalVote()) return getStoredVoter();
   if (hasLocalBestEverSubmit()) return getStoredBestEverVoter();
   return "";

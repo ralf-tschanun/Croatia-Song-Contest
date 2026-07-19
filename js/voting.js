@@ -3,7 +3,7 @@ let pendingPayload = null;
 const SUBMIT_FINAL_LABEL = "Send your Vote";
 const SUBMIT_SENDING_LABEL = "⏳ sending...";
 const VOTE_ALREADY_SUBMITTED_MSG = "You have already submitted your final vote.";
-const VOTE_SHEET_ALREADY_VOTED_MSG = "This person has already submitted their vote. Reset browser voting data at the bottom of the page to choose a different name.";
+const VOTE_SHEET_ALREADY_VOTED_MSG = "This person has already submitted their vote. Use Reset login / browser data to choose a different name.";
 const VOTE_RESUBMIT_MSG = "Your previous vote was reset. You can submit a new vote.";
 
 function setSubmitButtonSending(isSending) {
@@ -111,6 +111,7 @@ function lockVoterSelect() {
 }
 
 function unlockVoterSelect() {
+  if (typeof hasLoggedInVoter === "function" && hasLoggedInVoter()) return;
   document.getElementById("voterName").disabled = false;
 }
 
@@ -169,8 +170,9 @@ async function refreshVotingSession() {
   await loadVotedVoters();
   clearOrphanedLocalStorage();
   fillVoterSelect();
+  migrateLegacyLoggedInVoter();
 
-  if (hasLockedBrowserVoter()) {
+  if (applyLoggedInVoterToSelect("voterName", VOTERS) || hasLockedBrowserVoter()) {
     applyBrowserVoterLock();
   }
 
