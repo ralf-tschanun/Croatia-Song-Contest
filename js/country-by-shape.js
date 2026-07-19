@@ -32,8 +32,10 @@ let guessSubmitInFlight = false;
 let guessFlushInFlight = false;
 let guessPollInFlight = false;
 let adminSubmittingCountry = null;
+let adminSubmittingChoice = null;
 let adminTimerStarting = false;
 let pendingGuessChoices = {};
+let pendingAdminChoices = {};
 let countdownSeconds = 0;
 let countdownRunning = false;
 let localRoundToken = 0;
@@ -376,23 +378,93 @@ function getDisplayGuessChoice(countryNumber, status) {
   return null;
 }
 
+function updateGuessActiveInfo(seconds = countdownSeconds) {
+  const info = document.getElementById("guessActiveInfo");
+  if (!info) return;
+
+  if (COUNTRY_GUESS_STATE.gameComplete || COUNTRY_GUESS_STATE.activeCountry > COUNTRY_COUNT) {
+    info.textContent = `Game complete · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} countries resolved`;
+    return;
+  }
+
+  const openCountry = getOpenGuessCountry();
+  if (!openCountry) {
+    info.textContent = `Waiting · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} countries resolved`;
+    return;
+  }
+
+  const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+  const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 1;
+  let timerLabel = "open · pick anytime";
+
+  if (openCountry === activeCountry && endsAt && hasOpenGuessWindow(endsAt)) {
+    timerLabel = `${formatGuessCountdown(seconds)} left · guessing open`;
+  } else if (openCountry === activeCountry && isRoundFinishedLocally()) {
+    const locked = getUserGuessForCountry(activeCountry);
+    timerLabel = locked
+      ? `locked in · option ${locked}`
+      : "time up · no guess";
+  } else if (openCountry !== activeCountry) {
+    timerLabel = "open · pick anytime";
+  }
+
+  info.textContent = `Country ${openCountry} · ${timerLabel}`;
+}
+
 function formatGuessCountdown(seconds) {
   const safeSeconds = Math.max(0, Number(seconds) || 0);
   return `0:${String(safeSeconds).padStart(2, "0")}`;
 }
 
 function isTimerRunning() {
-  return countdownRunning && hasOpenGuessWindow();
+  return countdownRunning && !!String(COUNTRY_GUESS_STATE.endsAt || "").trim() && hasOpenGuessWindow();
 }
 
 function isRoundFinishedLocally() {
-  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
-  return token > 0 && localRoundToken === token && !hasOpenGuessWindow();
+  const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+  if (!endsAt) return false;
+  return !hasOpenGuessWindow(endsAt);
+}
+
+function getOpenGuessCountry() {
+  if (COUNTRY_GUESS_STATE.gameComplete) return null;
+
+  const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 1;
+  if (activeCountry < 1 || activeCountry > COUNTRY_COUNT) return null;
+
+  const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+
+  // Deadline still running → current admin-active country is open.
+  if (endsAt && hasOpenGuessWindow(endsAt)) {
+    return activeCountry;
+  }
+
+  // Deadline reached → unlock the next country immediately (no need to wait for correct answer).
+  if (endsAt && isRoundFinishedLocally()) {
+    const nextCountry = activeCountry + 1;
+    return nextCountry <= COUNTRY_COUNT ? nextCountry : null;
+  }
+
+  // No deadline yet → active country is free to guess.
+  return activeCountry;
 }
 
 function isLocalGuessWindowOpen() {
-  const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
-  return token > 0 && localRoundToken === token && hasOpenGuessWindow();
+  const openCountry = getOpenGuessCountry();
+  if (!openCountry) return false;
+  if (COUNTRY_GUESS_STATE.correctAnswers[String(openCountry)]) return false;
+
+  const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 0;
+  const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+
+  // Next country unlocked after previous deadline: always free until its own deadline exists.
+  if (openCountry !== activeCountry) return true;
+
+  // Active country with no deadline yet: free.
+  if (!endsAt) return true;
+
+  // Active country with deadline: open only while absolute endsAt is in the future.
+  return hasOpenGuessWindow(endsAt);
 }
 
 function sleep(ms) {
@@ -478,9 +550,9 @@ function startLocalCountdownForRound(roundToken, endsAt) {
   countdownSeconds = getRemainingGuessSeconds(endsValue);
   // Show countdown immediately as soon as endsAt is known — even if only a few seconds remain.
   countdownRunning = Number.isFinite(localRoundEndsAtMs);
-  updateGuessCountdownDisplay(countdownSeconds);
   renderGuessCountryList();
   renderAdminCountryList();
+  updateGuessCountdownDisplay(countdownSeconds);
 
   if (!Number.isFinite(localRoundEndsAtMs) || countdownSeconds <= 0) {
     onCountdownFinished();
@@ -534,6 +606,8 @@ async function onCountdownFinished() {
   renderAdminCountryList();
   updateGuessActiveInfo(0);
   updateAdminStatus(0);
+  const nextOpen = getOpenGuessCountry();
+  if (nextOpen) trimPendingGuessChoices(nextOpen);
   restartGuessStatePolling();
 }
 
@@ -542,16 +616,13 @@ function maybeStartCountdownFromServer() {
 
   const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
   const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
-  if (token <= 0 || !endsAt) return;
+  // Countdown only starts once an absolute endsAt exists.
+  if (!endsAt) return;
 
-  // As soon as endsAt is known, show countdown for this round.
-  if (isTimerRunning() && localRoundToken === token && COUNTRY_GUESS_STATE.endsAt) {
-    // Keep ticking against the same absolute endsAt.
-    return;
-  }
-  if (localRoundToken === token && !isTimerRunning() && guessAutoSubmittedForToken >= token) return;
+  if (isTimerRunning() && localRoundToken === token && token > 0) return;
+  if (isRoundFinishedLocally() && localRoundToken === token && guessAutoSubmittedForToken >= token) return;
 
-  startLocalCountdownForRound(token, endsAt);
+  startLocalCountdownForRound(token || 1, endsAt);
   restartGuessStatePolling();
 }
 
@@ -636,9 +707,7 @@ async function pollLiveGuessState() {
     const parsedNext = JSON.parse(getCountryGuessStateSignature());
     if (previousState.activeCountry !== parsedNext.activeCountry) {
       trimPendingGuessChoices(parsedNext.activeCountry);
-      if (!parsedNext.guessingOpen) {
-        resetCountdownForNewCountry();
-      }
+      resetCountdownForNewCountry();
     }
 
     if (isGuessViewVisible()) {
@@ -731,32 +800,17 @@ function updateAdminStatus(seconds = countdownSeconds) {
     return;
   }
 
-  const timerLabel = isTimerRunning()
-    ? `${formatGuessCountdown(seconds)} left · `
-    : (isRoundFinishedLocally() ? "enter correct answer · " : "ready for start · ");
+  const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+  const remaining = endsAt ? getRemainingGuessSeconds(endsAt) : seconds;
+  let timerLabel = "guessing open · set deadline · ";
+  if (endsAt && hasOpenGuessWindow(endsAt)) {
+    timerLabel = `${formatGuessCountdown(remaining)} left · `;
+  } else if (isRoundFinishedLocally()) {
+    timerLabel = "enter correct answer · ";
+  }
 
   status.textContent =
     `Active country: Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}${COUNTRY_GUESS_STATE.guessCount}/${COUNTRY_GUESS_STATE.totalPlayers} guessed · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} completed`;
-}
-
-function updateGuessActiveInfo(seconds = countdownSeconds) {
-  const info = document.getElementById("guessActiveInfo");
-  if (!info) return;
-
-  if (COUNTRY_GUESS_STATE.gameComplete || COUNTRY_GUESS_STATE.activeCountry > COUNTRY_COUNT) {
-    info.textContent = `Game complete · ${COUNTRY_GUESS_STATE.countriesCompleted}/${COUNTRY_COUNT} countries resolved`;
-    return;
-  }
-
-  const timerLabel = isTimerRunning()
-    ? `${formatGuessCountdown(seconds)} left · guessing open`
-    : (isRoundFinishedLocally()
-      ? (getUserGuessForCountry(COUNTRY_GUESS_STATE.activeCountry)
-        ? `locked in · option ${getUserGuessForCountry(COUNTRY_GUESS_STATE.activeCountry)}`
-        : "time up · no guess")
-      : "waiting for start");
-
-  info.textContent = `Country ${COUNTRY_GUESS_STATE.activeCountry} · ${timerLabel}`;
 }
 
 async function loadCountryGuessPulse() {
@@ -852,25 +906,35 @@ function getSelectedGuessChoice(countryNumber) {
 
 function getCountryGuessRowStatus(countryNumber) {
   const userChoice = getUserGuessForCountry(countryNumber);
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 1;
+  const openGuessCountry = getOpenGuessCountry();
 
   if (COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)]) {
     return userChoice ? "done" : "closed";
   }
 
-  if (userChoice && countryNumber <= activeCountry) return "done";
+  // Currently unlocked for guessing (current deadline country, or next country after deadline).
+  if (openGuessCountry && countryNumber === openGuessCountry) {
+    return "active";
+  }
 
-  if (countryNumber === activeCountry + 1 && isRoundFinishedLocally()) {
+  // Previous country whose deadline just ended.
+  if (countryNumber === activeCountry && isRoundFinishedLocally()) {
+    return userChoice ? "done" : "missed";
+  }
+
+  if (userChoice && openGuessCountry && countryNumber < openGuessCountry) {
+    return "done";
+  }
+
+  if (countryNumber < activeCountry) {
+    return userChoice ? "done" : "missed";
+  }
+
+  if (openGuessCountry && countryNumber === openGuessCountry + 1) {
     return "up-next";
   }
 
-  if (countryNumber === activeCountry) {
-    if (hasOpenGuessWindow()) return "active";
-    if (isRoundFinishedLocally()) return userChoice ? "done" : "missed";
-    return "waiting";
-  }
-
-  if (countryNumber < activeCountry) return userChoice ? "done" : "missed";
   return "locked";
 }
 
@@ -879,14 +943,19 @@ function getCountryGuessStatusLabel(status, countryNumber) {
   const pendingChoice = getPendingGuessChoice(countryNumber);
 
   if (status === "active") {
+    if (hasOpenGuessWindow()) {
+      return pendingChoice
+        ? `Open · selected ${pendingChoice}`
+        : "Open · pick 1–4";
+    }
     return pendingChoice
       ? `Open · selected ${pendingChoice}`
-      : "Open · pick 1–4";
+      : "Open · pick anytime";
   }
   if (status === "done" && userChoice) return `Locked in · option ${userChoice}`;
   if (status === "done") return "Locked in";
   if (status === "waiting") return "Waiting to start";
-  if (status === "up-next") return "Ready · waiting for start";
+  if (status === "up-next") return "Next";
   if (status === "closed" && userChoice) return `Resolved · your option ${userChoice}`;
   if (status === "closed") return "Resolved";
   if (status === "missed" && userChoice) return `Locked in · option ${userChoice}`;
@@ -905,7 +974,13 @@ function renderGuessCountryList() {
     const displayChoice = getDisplayGuessChoice(countryNumber, status);
     const isInteractive = status === "active";
     const options = [1, 2, 3, 4];
-    const showCountdown = status === "active";
+    const openGuessCountry = getOpenGuessCountry();
+    const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 1;
+    const showCountdown =
+      countryNumber === activeCountry &&
+      countryNumber === openGuessCountry &&
+      !!String(COUNTRY_GUESS_STATE.endsAt || "").trim() &&
+      hasOpenGuessWindow();
     const countdownHtml = showCountdown
       ? `<span class="country-guess-countdown" id="guess-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(countdownSeconds)}</span>`
       : "";
@@ -953,14 +1028,14 @@ function renderGuessCountryList() {
 function updateGuessSubmitButtonState() {
   const btn = document.getElementById("submitCountryGuessBtn");
   const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
-  const hasSubmittedActive = !!getUserGuessForCountry(activeCountry);
-  const selectedChoice = getSelectedGuessChoice(activeCountry);
+  const openCountry = getOpenGuessCountry();
+  const hasSubmittedOpen = openCountry ? !!getUserGuessForCountry(openCountry) : true;
+  const selectedChoice = openCountry ? getSelectedGuessChoice(openCountry) : null;
   const windowOpen = isLocalGuessWindowOpen();
 
   if (!btn) return;
   btn.textContent = SUBMIT_COUNTRY_GUESS_LABEL;
-  btn.disabled = !playerName || hasSubmittedActive || !selectedChoice || !windowOpen;
+  btn.disabled = !playerName || !openCountry || hasSubmittedOpen || !selectedChoice || !windowOpen;
 }
 
 function setSubmitCountryGuessButtonState(isSending) {
@@ -1000,6 +1075,7 @@ async function refreshGuessSession() {
 async function refreshAdminSession() {
   await loadCountryGuessState();
   await flushPendingGuessUploads({ withJitter: false });
+  maybeStartCountdownFromServer();
   updateAdminStatus();
   renderAdminCountryList();
   restartGuessStatePolling();
@@ -1049,7 +1125,7 @@ async function flushPendingGuessUploads({ withJitter = false } = {}) {
 }
 
 async function autoSubmitCountryGuess(forcedChoice = null) {
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
+  const activeCountry = Number(COUNTRY_GUESS_STATE.activeCountry) || 1;
   const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
   const choice = forcedChoice ?? getSelectedGuessChoice(activeCountry);
 
@@ -1084,16 +1160,18 @@ async function submitCountryGuess({ auto = false, choice: forcedChoice = null } 
   if (guessSubmitInFlight) return false;
 
   const playerName = document.getElementById("guessPlayerName")?.value.trim() || getStoredGuessVoter();
-  const activeCountry = COUNTRY_GUESS_STATE.activeCountry;
-  const choice = forcedChoice ?? getSelectedGuessChoice(activeCountry);
+  const targetCountry = auto
+    ? (Number(COUNTRY_GUESS_STATE.activeCountry) || 1)
+    : (getOpenGuessCountry() || Number(COUNTRY_GUESS_STATE.activeCountry) || 1);
+  const choice = forcedChoice ?? getSelectedGuessChoice(targetCountry);
 
   if (!playerName) {
     if (!auto) showGuessMessage("err", "Please select your name before submitting.");
     return false;
   }
 
-  if (COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)] && !getPendingGuessUploads()[String(activeCountry)]) {
-    if (!auto) showGuessMessage("ok", `Country ${activeCountry} already locked in: option ${COUNTRY_GUESS_STATE.userGuesses[String(activeCountry)]}.`);
+  if (COUNTRY_GUESS_STATE.userGuesses[String(targetCountry)] && !getPendingGuessUploads()[String(targetCountry)]) {
+    if (!auto) showGuessMessage("ok", `Country ${targetCountry} already locked in: option ${COUNTRY_GUESS_STATE.userGuesses[String(targetCountry)]}.`);
     updateGuessSubmitButtonState();
     return false;
   }
@@ -1116,15 +1194,15 @@ async function submitCountryGuess({ auto = false, choice: forcedChoice = null } 
   const token = Number(COUNTRY_GUESS_STATE.roundToken) || 0;
   queuePendingGuessUpload({
     voter: playerName,
-    country: activeCountry,
+    country: targetCountry,
     choice,
     roundToken: token
   });
-  clearPendingGuessChoice(activeCountry);
+  clearPendingGuessChoice(targetCountry);
   storeGuessVoter(playerName);
   lockGuessPlayerSelect();
   renderGuessCountryList();
-  showGuessMessage("ok", `Country ${activeCountry} locked in: option ${choice}.`);
+  showGuessMessage("ok", `Country ${targetCountry} locked in: option ${choice}.`);
 
   await flushPendingGuessUploads({ withJitter: auto });
   return true;
@@ -1147,11 +1225,14 @@ function getAdminCountryStatusLabel(status, countryNumber) {
   if (status === "done") {
     return "";
   }
-  if (status === "active") return "Timer running";
+  if (status === "active") {
+    const remaining = getRemainingGuessSeconds(COUNTRY_GUESS_STATE.endsAt);
+    return `${formatGuessCountdown(remaining)} left`;
+  }
   if (status === "waiting" && isRoundFinishedLocally() && countryNumber === COUNTRY_GUESS_STATE.activeCountry) {
     return "Enter correct answer";
   }
-  if (status === "waiting") return "Start timer";
+  if (status === "waiting") return "Guessing open · set deadline";
   if (status === "up-next") return "Next · waiting for start";
   return "Locked";
 }
@@ -1159,6 +1240,32 @@ function getAdminCountryStatusLabel(status, countryNumber) {
 function getSelectedAdminChoice(countryNumber) {
   const selected = document.querySelector(`input[name="admin-country-${countryNumber}"]:checked`);
   return selected ? Number(selected.value) : null;
+}
+
+function rememberPendingAdminChoice(countryNumber, choice) {
+  const n = Number(countryNumber);
+  const c = Number(choice);
+  if (!Number.isInteger(n) || n < 1 || n > COUNTRY_COUNT) return;
+  if (!Number.isInteger(c) || c < 1 || c > 4) return;
+  pendingAdminChoices[String(n)] = c;
+}
+
+function getPendingAdminChoice(countryNumber) {
+  const c = pendingAdminChoices[String(countryNumber)];
+  return Number.isInteger(c) ? c : null;
+}
+
+function clearPendingAdminChoice(countryNumber) {
+  delete pendingAdminChoices[String(countryNumber)];
+}
+
+function getDisplayAdminChoice(countryNumber) {
+  const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
+  if (Number.isInteger(savedChoice)) return savedChoice;
+  if (adminSubmittingCountry === countryNumber && Number.isInteger(adminSubmittingChoice)) {
+    return adminSubmittingChoice;
+  }
+  return getPendingAdminChoice(countryNumber);
 }
 
 function renderAdminCountryList() {
@@ -1169,15 +1276,22 @@ function renderAdminCountryList() {
     const countryNumber = index + 1;
     const status = getAdminCountryRowStatus(countryNumber);
     const savedChoice = COUNTRY_GUESS_STATE.correctAnswers[String(countryNumber)];
+    const displayChoice = getDisplayAdminChoice(countryNumber);
+    const isSubmitting = adminSubmittingCountry === countryNumber;
     const isActiveRow = countryNumber === COUNTRY_GUESS_STATE.activeCountry;
-    const timerRunning = isActiveRow && isTimerRunning();
+    const endsAt = String(COUNTRY_GUESS_STATE.endsAt || "").trim();
+    const hasDeadline = !!endsAt;
+    const deadlineOpen = isActiveRow && hasDeadline && hasOpenGuessWindow(endsAt);
     const roundFinished = isActiveRow && isRoundFinishedLocally();
-    const canStartTimer = isActiveRow && !savedChoice && !timerRunning && !roundFinished;
-    const canSubmitCorrect = isActiveRow && !savedChoice && roundFinished;
-    const showCountdown = isActiveRow && isTimerRunning();
+    const canStartTimer = isActiveRow && !savedChoice && !hasDeadline && !isSubmitting;
+    const canSubmitCorrect = isActiveRow && !savedChoice && roundFinished && !isSubmitting;
+    const canSelectCorrect = isActiveRow && !savedChoice && roundFinished && !isSubmitting;
+    const remaining = deadlineOpen ? getRemainingGuessSeconds(endsAt) : countdownSeconds;
+    const showCountdown = deadlineOpen;
     const countdownHtml = showCountdown
-      ? `<span class="country-guess-countdown" id="admin-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(countdownSeconds)}</span>`
+      ? `<span class="country-guess-countdown" id="admin-countdown-${countryNumber}" data-country="${countryNumber}">${formatGuessCountdown(remaining)}</span>`
       : "";
+    const submitLabel = isSubmitting ? ADMIN_SUBMIT_CORRECT_SENDING_LABEL : ADMIN_SUBMIT_CORRECT_LABEL;
 
     return `
       <div class="country-guess-row country-guess-row-${status}">
@@ -1191,16 +1305,18 @@ function renderAdminCountryList() {
         <div class="country-guess-options">
           ${[1, 2, 3, 4].map(choice => {
             const isSavedChoice = savedChoice === choice;
+            const isSelectedChoice = displayChoice === choice;
+            const highlight = isSavedChoice || (isSubmitting && isSelectedChoice);
             return `
-            <label class="country-guess-option-label${isSavedChoice ? " country-guess-option-label-saved" : ""}">
+            <label class="country-guess-option-label${highlight ? " country-guess-option-label-saved" : ""}">
               <input
                 type="radio"
                 name="admin-country-${countryNumber}"
                 class="country-admin-option"
                 value="${choice}"
                 data-country="${countryNumber}"
-                ${savedChoice === choice ? "checked" : ""}
-                ${canSubmitCorrect ? "" : "disabled"}
+                ${isSelectedChoice ? "checked" : ""}
+                ${canSelectCorrect ? "" : "disabled"}
               />
               <span>${choice}</span>
             </label>
@@ -1215,13 +1331,13 @@ function renderAdminCountryList() {
               id="admin-start-timer-${countryNumber}"
               onclick="adminStartTimer(${countryNumber})"
               ${canStartTimer ? "" : "disabled"}
-            >${ADMIN_START_TIMER_LABEL}</button>
+              >Set deadline</button>
             <button
               type="button"
               id="admin-submit-${countryNumber}"
               onclick="adminSubmitCorrect(${countryNumber})"
               ${canSubmitCorrect ? "" : "disabled"}
-            >${ADMIN_SUBMIT_CORRECT_LABEL}</button>
+            >${submitLabel}</button>
           </div>
         ` : ""}
       </div>
@@ -1344,7 +1460,9 @@ async function adminEndTimer(countryNumber, { auto = false } = {}) {
 }
 
 async function adminSubmitCorrect(countryNumber) {
-  const choice = getSelectedAdminChoice(countryNumber);
+  if (adminSubmittingCountry) return;
+
+  const choice = getSelectedAdminChoice(countryNumber) || getPendingAdminChoice(countryNumber);
 
   if (!choice) {
     showInputMessage("err", "Please choose the correct option (1, 2, 3 or 4).");
@@ -1358,18 +1476,23 @@ async function adminSubmitCorrect(countryNumber) {
 
   try {
     hideInputMessage();
+    rememberPendingAdminChoice(countryNumber, choice);
     adminSubmittingCountry = countryNumber;
+    adminSubmittingChoice = choice;
     renderAdminCountryList();
 
     const data = await jsonp(buildCountryShapeAdminSubmitCorrectUrl(countryNumber, choice));
     if (!isCountryShapeAdminSubmitCorrectSuccess(data)) {
       showInputMessage("err", data?.error || "Could not save correct answer.");
       adminSubmittingCountry = null;
+      adminSubmittingChoice = null;
       renderAdminCountryList();
       return;
     }
 
     adminSubmittingCountry = null;
+    adminSubmittingChoice = null;
+    clearPendingAdminChoice(countryNumber);
     resetCountdownForNewCountry();
     COUNTRY_GUESS_STATE.guessingOpen = false;
     COUNTRY_GUESS_STATE.endsAt = "";
@@ -1388,6 +1511,7 @@ async function adminSubmitCorrect(countryNumber) {
     }
   } catch (e) {
     adminSubmittingCountry = null;
+    adminSubmittingChoice = null;
     showInputMessage("err", "Could not save correct answer. Please check your connection.");
     console.error(e);
     renderAdminCountryList();
@@ -1399,8 +1523,13 @@ function bindAdminEvents() {
   if (!list || list.dataset.bound === "true") return;
   list.dataset.bound = "true";
 
-  list.addEventListener("change", () => {
+  list.addEventListener("change", event => {
     hideInputMessage();
+    const input = event.target;
+    if (input?.classList?.contains("country-admin-option")) {
+      const countryNumber = Number(String(input.name || "").replace("admin-country-", ""));
+      rememberPendingAdminChoice(countryNumber, Number(input.value));
+    }
   });
 }
 
