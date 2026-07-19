@@ -544,6 +544,10 @@ footer a:hover{text-decoration:underline}
   color:#dff7e8;
 }
 
+.country-guess-row-done .country-guess-status{
+  color:#9fefc0;
+}
+
 .country-guess-option-label-saved input{
   accent-color:#4caf78;
 }

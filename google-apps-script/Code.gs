@@ -9,7 +9,7 @@
 //
 // Version marker — after deploy, verify with:
 // ?action=apiInfo
-const API_VERSION = "2026-07-15-remove-country-shape-submits";
+const API_VERSION = "2026-07-19-country-shape-fast-pulse";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
@@ -22,11 +22,11 @@ const SONG_ROW_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter"];
 const BEST_EVER_SUBMIT_HEADERS = ["Nr", "Title", "Interpret", "Preview", "Voter", "Timestamp", "Event ID"];
 const COUNTRY_SHAPE_COUNTRY_COUNT = 20;
 const COUNTRY_SHAPE_GUESS_HEADERS = ["Timestamp", "Event ID", "Voter", "Country", "Choice"];
-const COUNTRY_SHAPE_GUESS_STATE_HEADERS = ["Event ID", "Active Country", "Guessing Open", "Round Token"];
+const COUNTRY_SHAPE_GUESS_STATE_HEADERS = ["Event ID", "Active Country", "Guessing Open", "Round Token", "Started At"];
 const COUNTRY_SHAPE_CORRECT_HEADERS = ["Timestamp", "Event ID", "Country", "Correct Choice"];
 const COUNTRY_SHAPE_POINT_POOL = 20;
 const COUNTRY_SHAPE_GUESS_CHOICES = [1, 2, 3, 4];
-const COUNTRY_SHAPE_GUESS_WINDOW_SECONDS = 20;
+const COUNTRY_SHAPE_GUESS_WINDOW_SECONDS = 15;
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -108,6 +108,7 @@ function doGet(e) {
         "bestEverCheck",
         "countryShapeResults",
         "countryShapeGuessState",
+        "countryShapeGuessPulse",
         "countryShapeGuessSubmit",
         "countryShapeAdminStartTimer",
         "countryShapeAdminEndTimer",
@@ -193,6 +194,11 @@ function doGet(e) {
     return json_(getCountryShapeGuessState_(ss, eventId, voter), e.parameter.callback);
   }
 
+  if (action === "countryShapeGuessPulse") {
+    // Lightweight poll: only reads the tiny state sheet (no guesses / correct / voters).
+    return json_(getCountryShapeGuessPulse_(ss, eventId), e.parameter.callback);
+  }
+
   if (action === "countryShapeGuessSubmit") {
     const lock = LockService.getScriptLock();
     lock.waitLock(10000);
@@ -218,7 +224,8 @@ function doGet(e) {
 
     try {
       const country = Number(e.parameter.country);
-      return json_(startCountryShapeGuessTimer_(ss, eventId, country), e.parameter.callback);
+      const startedAt = String(e.parameter.startedAt || "").trim();
+      return json_(startCountryShapeGuessTimer_(ss, eventId, country, startedAt), e.parameter.callback);
     } catch (err) {
       return json_({ ok: false, error: String(err) }, e.parameter.callback);
     } finally {
@@ -340,7 +347,8 @@ function countryShapeGuessStateNeedsNormalization_(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return false;
 
-  const rows = getSheetDataRange_(sheet, 2, 1, lastRow, 4).getValues();
+  const lastCol = Math.max(sheet.getLastColumn(), COUNTRY_SHAPE_GUESS_STATE_HEADERS.length);
+  const rows = getSheetDataRange_(sheet, 2, 1, lastRow, lastCol).getValues();
   return rows.some(row => row[2] instanceof Date);
 }
 
@@ -367,13 +375,15 @@ function normalizeCountryShapeGuessStateSheet_(ss) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return;
 
-  const rows = getSheetDataRange_(sheet, 2, 1, lastRow, 4).getValues();
+  const lastCol = Math.max(sheet.getLastColumn(), COUNTRY_SHAPE_GUESS_STATE_HEADERS.length);
+  const rows = getSheetDataRange_(sheet, 2, 1, lastRow, lastCol).getValues();
 
   rows.forEach((row, index) => {
     const sheetRow = index + 2;
     let activeCountry = Number(row[1]);
     let guessingOpen = row[2];
     let roundToken = row[3];
+    let startedAt = row[4] || "";
 
     if (!Number.isInteger(activeCountry) || activeCountry < 1) {
       activeCountry = 1;
@@ -396,8 +406,18 @@ function normalizeCountryShapeGuessStateSheet_(ss) {
       roundToken = Number(roundToken);
     }
 
-    getSheetDataRange_(sheet, sheetRow, 1, sheetRow, 4).setValues([
-      [String(row[0] || "").trim(), activeCountry, guessingOpen, roundToken]
+    if (startedAt instanceof Date) {
+      startedAt = startedAt.toISOString();
+    } else {
+      startedAt = String(startedAt || "").trim();
+    }
+
+    if (guessingOpen !== "open") {
+      startedAt = "";
+    }
+
+    getSheetDataRange_(sheet, sheetRow, 1, sheetRow, 5).setValues([
+      [String(row[0] || "").trim(), activeCountry, guessingOpen, roundToken, startedAt]
     ]);
   });
 
@@ -435,16 +455,24 @@ function parseCountryShapeStateRow_(row) {
   let activeCountry = Number(row[1]);
   let guessingOpen = row[2];
   let roundToken = row[3];
+  let startedAt = row[4] || "";
 
   if (!Number.isInteger(activeCountry) || activeCountry < 1) {
     activeCountry = 1;
+  }
+
+  if (startedAt instanceof Date) {
+    startedAt = startedAt.toISOString();
+  } else {
+    startedAt = String(startedAt || "").trim();
   }
 
   if (guessingOpen instanceof Date) {
     return {
       activeCountry: activeCountry,
       guessingOpen: false,
-      roundToken: Number(roundToken) || 0
+      roundToken: Number(roundToken) || 0,
+      startedAt: ""
     };
   }
 
@@ -452,7 +480,8 @@ function parseCountryShapeStateRow_(row) {
     return {
       activeCountry: activeCountry,
       guessingOpen: true,
-      roundToken: Number(roundToken) || 0
+      roundToken: Number(roundToken) || 0,
+      startedAt: startedAt
     };
   }
 
@@ -460,14 +489,16 @@ function parseCountryShapeStateRow_(row) {
     return {
       activeCountry: activeCountry,
       guessingOpen: false,
-      roundToken: Number(guessingOpen)
+      roundToken: Number(guessingOpen),
+      startedAt: ""
     };
   }
 
   return {
     activeCountry: activeCountry,
     guessingOpen: false,
-    roundToken: Number(roundToken) || 0
+    roundToken: Number(roundToken) || 0,
+    startedAt: ""
   };
 }
 
@@ -516,7 +547,7 @@ function getCountryShapeActiveState_(ss, eventId) {
   const match = rows.find(row => String(row[0] || "").trim() === String(eventId).trim());
 
   if (!match) {
-    return { activeCountry: 1, guessingOpen: false, roundToken: 0, initialized: false };
+    return { activeCountry: 1, guessingOpen: false, roundToken: 0, startedAt: "", initialized: false };
   }
 
   const parsed = parseCountryShapeStateRow_(match);
@@ -525,25 +556,27 @@ function getCountryShapeActiveState_(ss, eventId) {
     activeCountry: parsed.activeCountry,
     guessingOpen: parsed.guessingOpen,
     roundToken: parsed.roundToken,
+    startedAt: parsed.startedAt || "",
     initialized: true
   };
 }
 
-function updateCountryShapeState_(ss, eventId, activeCountry, guessingOpen, roundToken) {
+function updateCountryShapeState_(ss, eventId, activeCountry, guessingOpen, roundToken, startedAt) {
   maybeNormalizeCountryShapeGuessStateSheet_(ss);
   const sheet = getCountryShapeGuessStateSheet_(ss);
   const openValue = guessingOpen ? "open" : "";
   const tokenValue = Number(roundToken) || 0;
+  const startedValue = guessingOpen ? String(startedAt || new Date().toISOString()) : "";
   const indexes = findCountryShapeStateRowIndexes_(sheet, eventId);
 
   if (indexes.length > 0) {
-    getSheetDataRange_(sheet, indexes[0], 2, indexes[0], 4).setValues([[activeCountry, openValue, tokenValue]]);
+    getSheetDataRange_(sheet, indexes[0], 2, indexes[0], 5).setValues([[activeCountry, openValue, tokenValue, startedValue]]);
 
     for (let i = indexes.length - 1; i >= 1; i--) {
       sheet.deleteRow(indexes[i]);
     }
   } else {
-    sheet.appendRow([eventId, activeCountry, openValue, tokenValue]);
+    sheet.appendRow([eventId, activeCountry, openValue, tokenValue, startedValue]);
   }
 
   SpreadsheetApp.flush();
@@ -577,7 +610,7 @@ function hasCountryShapeCorrectAnswer_(ss, eventId, country) {
   return !!getCountryShapeCorrectAnswers_(ss, eventId)[String(country)];
 }
 
-function startCountryShapeGuessTimer_(ss, eventId, country) {
+function startCountryShapeGuessTimer_(ss, eventId, country, startedAt) {
   if (!Number.isInteger(country) || country < 1 || country > COUNTRY_SHAPE_COUNTRY_COUNT) {
     return { ok: false, error: "Invalid country." };
   }
@@ -598,7 +631,8 @@ function startCountryShapeGuessTimer_(ss, eventId, country) {
   }
 
   const newToken = state.roundToken + 1;
-  updateCountryShapeState_(ss, eventId, country, true, newToken);
+  const startedValue = String(startedAt || "").trim() || new Date().toISOString();
+  updateCountryShapeState_(ss, eventId, country, true, newToken, startedValue);
   const updated = getCountryShapeActiveState_(ss, eventId);
 
   return {
@@ -607,6 +641,7 @@ function startCountryShapeGuessTimer_(ss, eventId, country) {
     activeCountry: country,
     guessingOpen: true,
     roundToken: updated.roundToken,
+    startedAt: updated.startedAt || startedValue,
     guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS
   };
 }
@@ -627,7 +662,7 @@ function endCountryShapeGuessTimer_(ss, eventId, country) {
     return { ok: false, error: "Guessing is not open." };
   }
 
-  updateCountryShapeState_(ss, eventId, country, false, state.roundToken);
+  updateCountryShapeState_(ss, eventId, country, false, state.roundToken, "");
   const updated = getCountryShapeActiveState_(ss, eventId);
 
   return {
@@ -636,6 +671,7 @@ function endCountryShapeGuessTimer_(ss, eventId, country) {
     activeCountry: country,
     guessingOpen: false,
     roundToken: updated.roundToken,
+    startedAt: "",
     guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS
   };
 }
@@ -667,7 +703,7 @@ function submitCountryShapeCorrectAnswer_(ss, eventId, country, choice) {
 
   const nextCountry = country + 1;
   const gameComplete = nextCountry > COUNTRY_SHAPE_COUNTRY_COUNT;
-  updateCountryShapeState_(ss, eventId, gameComplete ? COUNTRY_SHAPE_COUNTRY_COUNT + 1 : nextCountry, false, state.roundToken);
+  updateCountryShapeState_(ss, eventId, gameComplete ? COUNTRY_SHAPE_COUNTRY_COUNT + 1 : nextCountry, false, state.roundToken, "");
 
   const correctAnswers = getCountryShapeCorrectAnswers_(ss, eventId);
   const newActive = getCountryShapeActiveState_(ss, eventId);
@@ -743,7 +779,13 @@ function submitCountryShapeGuess_(ss, data) {
   }
 
   if (hasCountryShapeGuess_(ss, data.eventId, data.voter, data.country)) {
-    return { ok: false, error: "This voter has already submitted a guess for this country." };
+    return {
+      ok: true,
+      action: "countryShapeGuessSubmit",
+      country: data.country,
+      choice: data.choice,
+      alreadySubmitted: true
+    };
   }
 
   const guessesSheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESSES);
@@ -755,6 +797,44 @@ function submitCountryShapeGuess_(ss, data) {
     action: "countryShapeGuessSubmit",
     country: data.country,
     choice: data.choice
+  };
+}
+
+function getCountryShapeGuessPulse_(ss, eventId) {
+  const sheet = ss.getSheetByName(SHEET_COUNTRY_SHAPE_GUESS_STATE);
+  if (!sheet || sheet.getLastRow() < 2) {
+    return {
+      ok: true,
+      action: "countryShapeGuessPulse",
+      activeCountry: 1,
+      guessingOpen: false,
+      roundToken: 0,
+      startedAt: "",
+      guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS,
+      countriesCompleted: 0,
+      gameComplete: false
+    };
+  }
+
+  const rows = sheet.getDataRange().getValues().slice(1);
+  const match = rows.find(row => String(row[0] || "").trim() === String(eventId).trim());
+  const parsed = match
+    ? parseCountryShapeStateRow_(match)
+    : { activeCountry: 1, guessingOpen: false, roundToken: 0, startedAt: "" };
+
+  const activeCountry = Number(parsed.activeCountry) || 1;
+  const gameComplete = activeCountry > COUNTRY_SHAPE_COUNTRY_COUNT;
+
+  return {
+    ok: true,
+    action: "countryShapeGuessPulse",
+    activeCountry: activeCountry,
+    guessingOpen: !!parsed.guessingOpen,
+    roundToken: Number(parsed.roundToken) || 0,
+    startedAt: parsed.startedAt || "",
+    guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS,
+    countriesCompleted: Math.max(0, Math.min(COUNTRY_SHAPE_COUNTRY_COUNT, activeCountry - 1)),
+    gameComplete: gameComplete
   };
 }
 
@@ -788,6 +868,7 @@ function getCountryShapeGuessState_(ss, eventId, voter) {
     activeCountry: activeCountry,
     guessingOpen: state.guessingOpen,
     roundToken: state.roundToken,
+    startedAt: state.startedAt || "",
     guessWindowSeconds: COUNTRY_SHAPE_GUESS_WINDOW_SECONDS,
     totalPlayers: totalPlayers,
     guessCount: guessedForActive.length,
