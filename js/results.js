@@ -58,13 +58,40 @@ function loadResults() {
     .finally(() => setRefreshResultsButtonState(false));
 }
 
-function renderResults(data) {
-  const rows = Array.isArray(data) ? data : (data.results || []);
+function buildPointsLookup(rows) {
   const pointsBySong = {};
 
   rows.forEach(r => {
-    if (r.song) pointsBySong[r.song] = Number(r.points) || 0;
+    const song = String(r?.song || "").trim();
+    if (!song) return;
+    pointsBySong[song] = Number(r.points) || 0;
   });
+
+  return pointsBySong;
+}
+
+function resolveResultPoints(song, pointsBySong) {
+  const parsed = normalizeSong(song);
+  const candidates = [
+    parsed.label,
+    getSongApiKey(song),
+    parsed.title,
+    formatSongDisplayTitle(parsed.title, parsed.artist)
+  ];
+
+  for (const key of candidates) {
+    const lookup = String(key || "").trim();
+    if (lookup && Object.prototype.hasOwnProperty.call(pointsBySong, lookup)) {
+      return pointsBySong[lookup];
+    }
+  }
+
+  return 0;
+}
+
+function renderResults(data) {
+  const rows = Array.isArray(data) ? data : (data.results || []);
+  const pointsBySong = buildPointsLookup(rows);
 
   const ordered = SONGS.map((song, idx) => {
     const parsed = normalizeSong(song);
@@ -72,7 +99,7 @@ function renderResults(data) {
       song: parsed.label,
       title: parsed.title,
       artist: parsed.artist,
-      points: pointsBySong[parsed.label] || pointsBySong[parsed.title] || pointsBySong[getSongApiKey(song)] || 0,
+      points: resolveResultPoints(song, pointsBySong),
       originalIndex: idx
     };
   })
@@ -85,8 +112,13 @@ function renderResults(data) {
   const { voterTotal, voted, pending } = buildVoterLists(votedVoters, VOTERS.length);
   const maxPossiblePoints = voterTotal * POINTS_PER_VOTE;
   const max = Math.max(1, ...ordered.map(r => r.points || 0));
+  const skippedStaleVotes = Number(data.skippedStaleVotes) || 0;
+  const staleNotice = skippedStaleVotes > 0
+    ? `<p class="small msg err" style="display:block">Some stored votes still reference an older song list and were ignored (${skippedStaleVotes} rows). Clear the Votes sheet if you changed songs and want a fresh ranking.</p>`
+    : "";
 
   document.getElementById("results").innerHTML = `
+    ${staleNotice}
     <div class="result-stats">
       <div class="stat">
         <div class="stat-head">

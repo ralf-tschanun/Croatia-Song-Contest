@@ -9,7 +9,7 @@
 //
 // Version marker — after deploy, verify with:
 // ?action=apiInfo
-const API_VERSION = "2026-07-20-country-shape-shared-10pt";
+const API_VERSION = "2026-07-20-voting-results-current-songs";
 
 const SHEET_VOTES = "Votes";
 const SHEET_SONGS = "Songs";
@@ -262,19 +262,74 @@ function doGet(e) {
     }
   }
 
+  if (action === "results") {
+    return json_(getVotingResults_(ss, eventId), e.parameter.callback);
+  }
+
+  return json_({ ok: false, error: "Unknown action: " + action }, e.parameter.callback);
+}
+
+function normalizeSongLookupKey_(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildSongLabelResolver_(songs) {
+  const byKey = {};
+
+  songs.forEach(song => {
+    const label = String(song.label || "").trim();
+    if (!label) return;
+
+    byKey[normalizeSongLookupKey_(label)] = label;
+
+    const title = String(song.title || "").trim();
+    if (title) byKey[normalizeSongLookupKey_(title)] = label;
+
+    const display = formatSongLabel_(song.title, song.artist);
+    if (display) byKey[normalizeSongLookupKey_(display)] = label;
+  });
+
+  return function resolveVoteSongKey(voteSongKey) {
+    const key = normalizeSongLookupKey_(voteSongKey);
+    if (!key) return null;
+    return byKey[key] || null;
+  };
+}
+
+function getVotingResults_(ss, eventId) {
+  const songs = getSongs_(ss);
+  const validVoters = getVoters_(ss);
+  const validVoterKeys = {};
+
+  validVoters.forEach(voter => {
+    validVoterKeys[normalizeSongLookupKey_(voter)] = voter;
+  });
+
+  const resolveSong = buildSongLabelResolver_(songs);
+  const totals = {};
+  songs.forEach(song => {
+    totals[song.label] = 0;
+  });
+
   const votesSheet = ss.getSheetByName(SHEET_VOTES);
   const rows = votesSheet.getDataRange().getValues().slice(1).filter(r => r[1] === eventId);
-
-  const totals = {};
-  getSongs_(ss).forEach(song => totals[song.label] = 0);
-
   const voterSet = {};
+  let skippedStaleVotes = 0;
+
   rows.forEach(r => {
-    const voter = String(r[2] || "").trim();
-    const song = r[3];
+    const voterKey = normalizeSongLookupKey_(r[2]);
+    const canonicalVoter = validVoterKeys[voterKey];
+    if (!canonicalVoter) return;
+
+    const songLabel = resolveSong(r[3]);
+    if (!songLabel) {
+      skippedStaleVotes++;
+      return;
+    }
+
     const points = Number(r[4]) || 0;
-    if (song) totals[song] = (totals[song] || 0) + points;
-    if (voter) voterSet[voter.toLowerCase()] = voter;
+    totals[songLabel] = (totals[songLabel] || 0) + points;
+    voterSet[voterKey] = canonicalVoter;
   });
 
   const results = Object.entries(totals)
@@ -283,12 +338,13 @@ function doGet(e) {
 
   const votedVoters = Object.values(voterSet).sort((a, b) => a.localeCompare(b, "de"));
 
-  return json_({
+  return {
     ok: true,
     votingCount: votedVoters.length,
     votedVoters: votedVoters,
-    results: results
-  }, e.parameter.callback);
+    results: results,
+    skippedStaleVotes: skippedStaleVotes
+  };
 }
 
 function ensureSheetsExist_(ss) {
